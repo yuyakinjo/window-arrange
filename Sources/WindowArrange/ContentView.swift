@@ -307,6 +307,7 @@ private struct ShortcutsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Label("前面のアプリのウィンドウを操作します", systemImage: "cursorarrow.rays").font(.callout).foregroundStyle(.secondary)
+                RepeatModePicker()
                 if !model.shortcutFailures.isEmpty {
                     Label("登録できなかった操作：" + model.shortcutFailures.joined(separator: "、"), systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
                 }
@@ -342,6 +343,9 @@ private struct SettingsView: View {
                 LabeledContent("アクセシビリティ", value: model.trusted ? "許可済み" : "未許可")
                 Button("システム設定を開く") { model.accessibility.requestAccess() }
             }
+            Section("サイズの繰り返し") {
+                RepeatModePicker()
+            }
             Section("Snapshot") {
                 Toggle("Spacesの所属も保存・復元する（実験機能）", isOn: Binding(get: { model.data.spacesEnabled }, set: { model.setSpacesEnabled($0) }))
                 LabeledContent("システムAPI", value: model.nativeSpaces.available ? "検出済み · 動作保証なし" : "この環境では利用不可")
@@ -359,5 +363,20 @@ private struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).disabled(model.busy)
+    }
+}
+
+private struct RepeatModePicker: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("左右・上下の配置を繰り返す", selection: Binding(get: { model.data.repeatMode }, set: { model.setRepeatMode($0) })) {
+                ForEach(LayoutRepeatMode.allCases) { mode in Text(mode.title).tag(mode) }
+            }
+            .pickerStyle(.radioGroup)
+            .disabled(!model.storageAvailable)
+            Text("同じショートカットを押すと、cycle は現在の画面で 1/2 → 1/3 → 1/2… と切り替えます。rotation は 1/3 の次に、次のディスプレイの 1/2 へ移動します。開いているMacBookの内蔵画面も対象です。None は従来どおり半分に配置します。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

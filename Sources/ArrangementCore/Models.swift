@@ -103,7 +103,21 @@ public struct AppData: Codable {
     public var shortcuts: [String: Shortcut] = [:]
     public var selectedSnapshotID: UUID?
     public var spacesEnabled = true
+    public var repeatMode: LayoutRepeatMode = .none
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case version, snapshots, shortcuts, selectedSnapshotID, spacesEnabled, repeatMode
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        snapshots = try values.decode([Snapshot].self, forKey: .snapshots)
+        shortcuts = try values.decode([String: Shortcut].self, forKey: .shortcuts)
+        selectedSnapshotID = try values.decodeIfPresent(UUID.self, forKey: .selectedSnapshotID)
+        spacesEnabled = try values.decode(Bool.self, forKey: .spacesEnabled)
+        repeatMode = try values.decodeIfPresent(LayoutRepeatMode.self, forKey: .repeatMode) ?? .none
+    }
 }
 
 public enum Layout {

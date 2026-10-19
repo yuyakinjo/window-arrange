@@ -78,6 +78,7 @@ final class AppModel: ObservableObject {
         } catch { show(error) }
     }
     func setSpacesEnabled(_ enabled: Bool) { do { try update { $0.spacesEnabled = enabled } } catch { show(error) } }
+    func setRepeatMode(_ mode: LayoutRepeatMode) { do { try update { $0.repeatMode = mode } } catch { show(error) } }
     func setShortcut(_ shortcut: Shortcut?, action: WindowAction) {
         do {
             if let shortcut {
@@ -103,7 +104,7 @@ final class AppModel: ObservableObject {
             await restore(selected); return
         }
         busy = true; defer { busy = false }
-        do { try await accessibility.perform(action) } catch { show(error) }
+        do { try await accessibility.perform(action, repeatMode: data.repeatMode) } catch { show(error) }
     }
     func capture() async {
         guard !busy else { return }
@@ -127,10 +128,8 @@ final class AppModel: ObservableObject {
         do {
             try accessibility.requireAccess()
             let useSpaces = snapshot.backend == .nativeSpaces
-            let currentSpaces = useSpaces ? try nativeSpaces.spaces() : []
-            let live = try await accessibility.windows(spaces: useSpaces ? nativeSpaces : nil).windows
+            let live = try await accessibility.restorationWindows(for: snapshot, spaces: useSpaces ? nativeSpaces : nil)
             let matches = WindowMatcher.match(saved: snapshot.windows, live: live.map(\.record))
-            let displays = accessibility.displays()
             var restored = 0, adjusted = 0, issues: [String] = []
             for (index, saved) in snapshot.windows.enumerated() {
                 progress = "復元中 \(index + 1) / \(snapshot.windows.count)"
@@ -139,32 +138,11 @@ final class AppModel: ObservableObject {
                     let candidates = live.filter { $0.record.appID == saved.appID }
                     issues.append("\(label)：" + (candidates.isEmpty ? "アプリのウィンドウが見つかりません" : "ウィンドウを特定できません。保存したプロジェクト・書類を開いてください。同じプロジェクトの候補が複数ある場合は自動選択しません。")); continue
                 }
-                let originallyMinimized = AX.bool(window.element, kAXMinimizedAttribute)
                 do {
-                    // Validate the saved destination before changing any state.
-                    let space = currentSpaces.first { $0.record.id == saved.spaceID }
-                    if useSpaces && space == nil { throw ArrangeError("保存先のSpaceが削除されたか接続されていません") }
-                    guard let fallback = displays.first else { throw ArrangeError("ディスプレイがありません") }
-                    let destination = (useSpaces ? displays.first { $0.id == space?.record.displayID } : nil)
-                        ?? displays.first { $0.id == saved.displayID } ?? fallback
-                    let oldDisplay = snapshot.displays.first { $0.id == saved.displayID }
-                    let adapted = destination.id != saved.displayID || oldDisplay?.visibleFrame != destination.visibleFrame
-                    let target = oldDisplay.map { Layout.remap(saved.frame, from: $0.visibleFrame, to: destination.visibleFrame) } ?? saved.frame
-                    guard !AX.bool(window.element, "AXFullScreen") else { throw ArrangeError("フルスクリーンを解除してください") }
-                    if AX.bool(window.element, kAXMinimizedAttribute) { try AX.setBool(window.element, kAXMinimizedAttribute, false) }
-                    let client = try AccessibilityPlacementClient(element: window.element, accessibility: accessibility, spaces: useSpaces ? nativeSpaces : nil)
-                    try await WindowPlacementRestorer.restore(
-                        to: WindowPlacementTarget(frame: target, displayID: destination.id, spaceID: useSpaces ? saved.spaceID : nil), using: client)
-                    if AX.bool(window.element, kAXMinimizedAttribute) != saved.minimized { try AX.setBool(window.element, kAXMinimizedAttribute, saved.minimized) }
-                    if useSpaces, let nativeID = window.record.nativeID, nativeSpaces.spaceForWindow(nativeID)?.record.id != saved.spaceID {
-                        throw ArrangeError("復元後のSpaceが一致しません")
-                    }
+                    let adapted = try await SnapshotWindowRestorer.restore(saved, snapshot: snapshot, window: window, accessibility: accessibility, spaces: nativeSpaces)
                     restored += 1
                     if adapted { adjusted += 1 }
                 } catch {
-                    if AX.bool(window.element, kAXMinimizedAttribute) != originallyMinimized {
-                        try? AX.setBool(window.element, kAXMinimizedAttribute, originallyMinimized)
-                    }
                     issues.append("\(label)：\(error.localizedDescription)")
                 }
                 await Task.yield()

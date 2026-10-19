@@ -22,6 +22,17 @@ struct Launcher {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--restore-saved-window"), CommandLine.arguments.indices.contains(index + 1),
+           let id = UUID(uuidString: CommandLine.arguments[index + 1]) {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                do { try await RestoreDiagnostics.restoreSavedWindow(id); fflush(stdout); exit(0) }
+                catch { print(error.localizedDescription); fflush(stdout); exit(1) }
+            }
+            app.run()
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--test-window"), CommandLine.arguments.indices.contains(index + 1) {
             IntegrationCheck.fixture(title: CommandLine.arguments[index + 1])
             return
@@ -49,6 +60,10 @@ struct Launcher {
             if let json = try? JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys]),
                let string = String(data: json, encoding: .utf8) { print(string) }
             return
+        }
+        if let unsupported = CommandLine.arguments.dropFirst().first(where: { $0.hasPrefix("--") }) {
+            print("Unsupported option: \(unsupported). Development checks require a debug build.")
+            exit(64)
         }
         WindowArrangeApp.main()
     }

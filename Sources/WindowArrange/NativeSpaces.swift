@@ -18,6 +18,7 @@ final class NativeSpaces {
     private typealias GetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<UInt32>) -> Int32
     private typealias MoveWindows = @convention(c) (Int32, CFArray, UInt64) -> Void
     private typealias BridgeOperation = @convention(c) (AnyObject) -> Int64
+    private typealias CurrentSpace = @convention(c) (Int32, CFString) -> UInt64
     private let skyLight: UnsafeMutableRawPointer?
     private let applicationServices: UnsafeMutableRawPointer?
     private let connection: Connection?
@@ -26,6 +27,7 @@ final class NativeSpaces {
     private let getWindow: GetWindow?
     private let moveWindows: MoveWindows?
     private let bridgeOperation: BridgeOperation?
+    private let currentSpace: CurrentSpace?
 
     init() {
         let sky = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
@@ -41,6 +43,7 @@ final class NativeSpaces {
         getWindow = symbol(ax, "_AXUIElementGetWindow", GetWindow.self)
         moveWindows = symbol(sky, "SLSMoveWindowsToManagedSpace", MoveWindows.self)
         bridgeOperation = symbol(sky, "SLSPerformAsynchronousBridgedWindowManagementOperation", BridgeOperation.self)
+        currentSpace = symbol(sky, "SLSManagedDisplayGetCurrentSpace", CurrentSpace.self)
     }
     // Keep loaded handles alive for the lifetime of the adapter.
     deinit { if let skyLight { dlclose(skyLight) }; if let applicationServices { dlclose(applicationServices) } }
@@ -84,6 +87,49 @@ final class NativeSpaces {
         // Sticky windows have no single desktop to restore.
         guard ids.count == 1 else { return nil }
         return try? spaces().first { $0.runtimeID == ids[0] }
+    }
+    func activeSpaces() throws -> [LiveSpace] {
+        guard let connection, let currentSpace else { throw ArrangeError("表示中のSpaceを取得できませんでした。") }
+        let all = try spaces()
+        let displays = Set(all.map { $0.record.displayID })
+        let active = all.filter { currentSpace(connection(), $0.record.displayID as CFString) == $0.runtimeID }
+        guard active.count == displays.count else {
+            throw ArrangeError("現在のデスクトップを再表示するための情報を取得できません。フルスクリーンを解除してから再試行してください。")
+        }
+        return active
+    }
+    @MainActor
+    func activate(_ uuid: String) async throws {
+        guard let connection, let currentSpace, let target = try spaces().first(where: { $0.record.id == uuid }) else {
+            throw ArrangeError("表示するSpaceが見つかりませんでした。")
+        }
+        if currentSpace(connection(), target.record.displayID as CFString) == target.runtimeID { return }
+        guard let cls = NSClassFromString("SLSBridgedManagedDisplaySetCurrentSpaceOperation") else {
+            throw ArrangeError("別Spaceのウィンドウを取得できません。このmacOSでは対象のSpaceを一度表示してから復元してください。")
+        }
+        let allocSelector = NSSelectorFromString("alloc")
+        let initSelector = NSSelectorFromString("initWithDisplayIdentifier:spaceID:")
+        typealias Allocate = @convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>?
+        typealias Initialize = @convention(c) (AnyObject, Selector, NSString, UInt64) -> Unmanaged<AnyObject>?
+        typealias Perform = @convention(c) (AnyObject, Selector) -> Void
+        let performSelector = NSSelectorFromString("performWithWMBridgeDelegate")
+        guard let meta = object_getClass(cls), let allocIMP = class_getMethodImplementation(meta, allocSelector),
+              let initMethod = class_getInstanceMethod(cls, initSelector), let performMethod = class_getInstanceMethod(cls, performSelector) else {
+            throw ArrangeError("Space表示用のシステムAPIが変更されています。")
+        }
+        let allocate = unsafeBitCast(allocIMP, to: Allocate.self)
+        let initialize = unsafeBitCast(method_getImplementation(initMethod), to: Initialize.self)
+        guard let raw = allocate(cls, allocSelector),
+              let operation = initialize(raw.takeUnretainedValue(), initSelector, target.record.displayID as NSString, target.runtimeID)?.takeRetainedValue() else {
+            throw ArrangeError("Spaceの表示を開始できませんでした。")
+        }
+        let perform = unsafeBitCast(method_getImplementation(performMethod), to: Perform.self)
+        perform(operation, performSelector)
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(100))
+            if currentSpace(connection(), target.record.displayID as CFString) == target.runtimeID { return }
+        }
+        throw ArrangeError("対象Spaceを表示できませんでした。対象のデスクトップを一度表示してから再試行してください。")
     }
     @MainActor
     func move(window id: UInt32, to uuid: String) async throws {

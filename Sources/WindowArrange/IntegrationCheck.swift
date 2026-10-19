@@ -65,9 +65,9 @@ enum IntegrationCheck {
             }
             try await spaces.move(window: id, to: other.record.id)
             print("PASS: move to another Space with membership verification")
-            try await spaces.move(window: id, to: original.record.id)
-            try AX.setFrame(window, initial)
-            try await Task.sleep(for: .milliseconds(200))
+            let client = try AccessibilityPlacementClient(element: window, accessibility: service, spaces: spaces)
+            try await WindowPlacementRestorer.restore(
+                to: WindowPlacementTarget(frame: initial, displayID: display.id, spaceID: original.record.id), using: client)
             guard spaces.spaceForWindow(id)?.record.id == original.record.id,
                   let final = AX.frame(window), Layout.close(final, initial) else { throw ArrangeError("Space and frame restoration verification failed") }
             print("PASS: original Space and frame restoration")
@@ -80,19 +80,24 @@ enum IntegrationCheck {
                 try await Task.sleep(for: .milliseconds(400))
                 try await spaces.move(window: id, to: remoteSpace.record.id)
                 print("SETUP: fixture is on another display's last Space")
-                do {
-                    try await spaces.move(window: id, to: original.record.id)
-                    try AX.setFrame(window, initial)
-                    try await Task.sleep(for: .milliseconds(500))
-                    guard spaces.spaceForWindow(id)?.record.id == original.record.id,
-                          let frame = AX.frame(window), Layout.close(frame, initial) else {
-                        throw ArrangeError("Cross-display Space/frame mismatch")
-                    }
-                    print("PASS: restore from another display's second desktop")
-                } catch {
-                    let frame = AX.frame(window)
-                    print("TRACE: original order failed; physical display matches destination: \(frame.flatMap { Layout.display(for: $0, in: service.displays()) }?.id == display.id); Space matches destination: \(spaces.spaceForWindow(id)?.record.id == original.record.id)")
-                    throw error
+                try await WindowPlacementRestorer.restore(
+                    to: WindowPlacementTarget(frame: initial, displayID: display.id, spaceID: original.record.id), using: client)
+                print("PASS: restore original display/Space/frame from another display's second desktop")
+                // Also exercise the reverse path and same-display desktop changes.
+                try await WindowPlacementRestorer.restore(
+                    to: WindowPlacementTarget(frame: remoteFrame, displayID: otherDisplay.id, spaceID: remoteSpace.record.id), using: client)
+                print("PASS: restore other display's saved Space/frame from original display")
+                if let firstSpace = desktops.first(where: { $0.record.displayID == otherDisplay.id && $0.record.id != remoteSpace.record.id }) {
+                    try await WindowPlacementRestorer.restore(
+                        to: WindowPlacementTarget(frame: remoteFrame, displayID: otherDisplay.id, spaceID: firstSpace.record.id), using: client)
+                    print("PASS: same-display restoration from second desktop to first desktop")
+                }
+                try await WindowPlacementRestorer.restore(
+                    to: WindowPlacementTarget(frame: initial, displayID: display.id, spaceID: original.record.id), using: client)
+                if let visibleSpace = desktops.first(where: { $0.record.displayID == otherDisplay.id && $0.record.id != remoteSpace.record.id }) {
+                    try await verifyHiddenWindowEnumeration(window: window, windowID: id, childPID: child.processIdentifier,
+                        spaces: spaces, savedSpace: original,
+                        remoteDisplay: otherDisplay, remoteFrame: remoteFrame, remoteSpace: remoteSpace, visibleSpace: visibleSpace)
                 }
             }
             return 0
@@ -100,6 +105,46 @@ enum IntegrationCheck {
             print("FAIL: \(error.localizedDescription)")
             return 1
         }
+    }
+    private static func verifyHiddenWindowEnumeration(window: AXUIElement, windowID: UInt32, childPID: pid_t,
+        spaces: NativeSpaces, savedSpace: LiveSpace,
+        remoteDisplay: DisplayRecord, remoteFrame: CGRect, remoteSpace: LiveSpace, visibleSpace: LiveSpace) async throws {
+        let before = try spaces.activeSpaces()
+        var failure: Error?
+        do {
+            let provider: AccessibilityService.WindowProvider = { app in
+                // Model Electron's actual behavior: omit the child window while
+                // its Space is inactive. Other applications are read normally.
+                if app.processIdentifier == childPID, let current = spaces.spaceForWindow(windowID) {
+                    let active = (try? spaces.activeSpaces()) ?? []
+                    if !active.contains(where: { $0.record.id == current.record.id }) { return [] }
+                }
+                return AX.value(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement] ?? []
+            }
+            let warm = AccessibilityService(windowProvider: provider)
+            let captured = try await warm.windows(spaces: spaces).windows
+            guard let savedWindow = captured.first(where: { $0.record.nativeID == windowID }) else { throw ArrangeError("Enumeration did not capture the test window") }
+            let snapshot = Snapshot(name: "Hidden window regression", backend: .nativeSpaces, displays: warm.displays(), spaces: [savedSpace.record], windows: [savedWindow.record])
+            let rawClient = try AccessibilityPlacementClient(element: window, accessibility: warm, spaces: spaces)
+            try await WindowPlacementRestorer.restore(
+                to: WindowPlacementTarget(frame: remoteFrame, displayID: remoteDisplay.id, spaceID: remoteSpace.record.id), using: rawClient)
+            try await spaces.activate(visibleSpace.record.id)
+            let retained = try await warm.restorationWindows(for: snapshot, spaces: spaces)
+            guard retained.contains(where: { $0.record.nativeID == windowID }) else { throw ArrangeError("Cached window disappeared from restoration candidates") }
+            print("PASS: snapshot reference survives omission from inactive-Space AXWindows")
+            let cold = AccessibilityService(windowProvider: provider)
+            let recovered = try await cold.restorationWindows(for: snapshot, spaces: spaces)
+            let matches = WindowMatcher.match(saved: snapshot.windows, live: recovered.map(\.record))
+            guard let match = matches[savedWindow.record.id], let target = recovered.first(where: { $0.record.id == match }) else {
+                throw ArrangeError("Fresh service could not rediscover inactive-Space fixture")
+            }
+            _ = try await SnapshotWindowRestorer.restore(savedWindow.record, snapshot: snapshot, window: target, accessibility: cold, spaces: spaces)
+            print("PASS: full rediscovery → matching → original display/Space/frame restoration after cache reset")
+        } catch { failure = error }
+        for space in before {
+            do { try await spaces.activate(space.record.id) } catch { if failure == nil { failure = error } }
+        }
+        if let failure { throw failure }
     }
 }
 #endif
