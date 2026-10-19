@@ -375,7 +375,7 @@ private struct RepeatModePicker: View {
             }
             .pickerStyle(.radioGroup)
             .disabled(!model.storageAvailable)
-            Text("同じショートカットを押すと、cycle は現在の画面で 1/2 → 1/3 → 1/2… と切り替えます。rotation は 1/3 の次に、次のディスプレイの 1/2 へ移動します。開いているMacBookの内蔵画面も対象です。None は従来どおり半分に配置します。")
+            Text("Cycle は同じ画面で 1/2 → 2/3 → 1/3 を繰り返します。Cycle Displays は半画面ずつ移動します。右半分なら「この画面の右 → 次の画面の左 → 右 → …」と巡回します。開いているMacBookの内蔵画面も対象です。None は半分に配置します。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }

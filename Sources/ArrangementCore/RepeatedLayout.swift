@@ -2,13 +2,15 @@ import Foundation
 import CoreGraphics
 
 public enum LayoutRepeatMode: String, Codable, CaseIterable, Identifiable {
-    case none, cycle, rotation
+    case none, cycle
+    // Keep the persisted value so existing rotation selections remain valid.
+    case displays = "rotation"
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .none: return "None（デフォルト）"
-        case .cycle: return "cycle 1/2, 1/3"
-        case .rotation: return "rotation 1/2, 1/3"
+        case .cycle: return "Cycle 1/2, 2/3, and 1/3"
+        case .displays: return "Cycle Displays"
         }
     }
 }
@@ -31,11 +33,38 @@ extension Layout {
             }
         }
         let half = fractionalFrame(for: action, screen: display.visibleFrame, fraction: 1.0 / 2)
-        let third = fractionalFrame(for: action, screen: display.visibleFrame, fraction: 1.0 / 3)
-        if close(window, half) { return WindowPlacementTarget(frame: third, displayID: display.id) }
-        if repeatMode == .rotation, close(window, third) {
-            let next = displays[(index + 1) % displays.count]
-            return WindowPlacementTarget(frame: fractionalFrame(for: action, screen: next.visibleFrame, fraction: 1.0 / 2), displayID: next.id)
+        if repeatMode == .cycle {
+            let twoThirds = fractionalFrame(for: action, screen: display.visibleFrame, fraction: 2.0 / 3)
+            let third = fractionalFrame(for: action, screen: display.visibleFrame, fraction: 1.0 / 3)
+            if close(window, half) { return WindowPlacementTarget(frame: twoThirds, displayID: display.id) }
+            if close(window, twoThirds) { return WindowPlacementTarget(frame: third, displayID: display.id) }
+            return WindowPlacementTarget(frame: half, displayID: display.id)
+        }
+        if close(window, half), displays.count > 1 {
+            // Crossing an edge enters the facing half of the adjacent screen.
+            // The next press then reaches the requested edge on that screen.
+            let horizontal = action == .left || action == .right
+            let ordered = displays.sorted { a, b in
+                let aPrimary = horizontal ? a.frame.minX : a.frame.minY
+                let bPrimary = horizontal ? b.frame.minX : b.frame.minY
+                if aPrimary != bPrimary { return aPrimary < bPrimary }
+                let aSecondary = horizontal ? a.frame.minY : a.frame.minX
+                let bSecondary = horizontal ? b.frame.minY : b.frame.minX
+                if aSecondary != bSecondary { return aSecondary < bSecondary }
+                return a.id < b.id
+            }
+            let current = ordered.firstIndex(where: { $0.id == display.id })!
+            let step = action == .left || action == .top ? -1 : 1
+            let next = ordered[(current + step + ordered.count) % ordered.count]
+            let opposite: WindowAction
+            switch action {
+            case .left: opposite = .right
+            case .right: opposite = .left
+            case .top: opposite = .bottom
+            case .bottom: opposite = .top
+            default: preconditionFailure("Only edge placements cycle displays")
+            }
+            return WindowPlacementTarget(frame: fractionalFrame(for: opposite, screen: next.visibleFrame, fraction: 1.0 / 2), displayID: next.id)
         }
         return WindowPlacementTarget(frame: half, displayID: display.id)
     }
