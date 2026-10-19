@@ -105,7 +105,7 @@ Swift Testingで座標変換、モニター選択、ウィンドウ照合、JSON
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --integration-check
 ```
 
-この開発環境での確認結果：自動テスト57件成功。検証ウィンドウで、AXWindowsから対象が消える状態を模擬し、キャッシュで対象を維持する場合と、空のキャッシュからSpaceを一時表示して再取得する場合の両方を確認しました。実際のVS Codeでも、WindowServerには存在するがAXWindowsには現れない1枚を再取得し、既存SnapshotのMacBook側のSpace・位置・サイズへ復元できることを確認済みです。
+この開発環境での確認結果：自動テスト62件成功。検証ウィンドウで、AXWindowsから対象が消える状態を模擬し、キャッシュで対象を維持する場合と、空のキャッシュからSpaceを一時表示して再取得する場合の両方を確認しました。実際のVS Codeでも、WindowServerには存在するがAXWindowsには現れない1枚を再取得し、既存SnapshotのMacBook側のSpace・位置・サイズへ復元できることを確認済みです。
 
 検証ウィンドウで、外部モニターのデスクトップ2からMacBookへの復元、逆方向の復元、外部モニター内のデスクトップ2→1、最小化と解除も確認済みです。画面上ではキーの記録・解除と重複キーのエラー表示も確認しました。ほかのOSバージョン・各アプリでのSpaces対応は別途確認が必要です。
 
