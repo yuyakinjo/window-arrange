@@ -36,7 +36,7 @@ enum NativeTilingIntegrationCheck {
                     }
                     // Coordinate assignment alone does not establish native
                     // tiling state or enable Return to Previous Size.
-                    guard let menuBar = AX.element(application, kAXMenuBarAttribute), untileEnabled(in: menuBar) else {
+                    guard let menuBar = AX.element(application, kAXMenuBarAttribute), menuItemEnabled(in: menuBar, identifier: "_zoomUntile:") else {
                         throw ArrangeError("Native tile state missing for \(action)")
                     }
                     guard !AX.bool(window, "AXFullScreen") else { throw ArrangeError("Native placement entered full screen") }
@@ -73,7 +73,7 @@ enum NativeTilingIntegrationCheck {
                     try await Task.sleep(for: .milliseconds(500))
                     guard let actual = AX.frame(window), Layout.close(actual, display.visibleFrame, tolerance: 32),
                           !AX.bool(window, "AXFullScreen"),
-                          let menuBar = AX.element(application, kAXMenuBarAttribute), untileEnabled(in: menuBar) else {
+                          let menuBar = AX.element(application, kAXMenuBarAttribute), menuItemEnabled(in: menuBar, identifier: "_zoomUntile:") else {
                         throw ArrangeError("Native Fill failed in \(mode)")
                     }
                     print("PASS: native Fill in \(mode)")
@@ -126,17 +126,22 @@ enum NativeTilingIntegrationCheck {
         for _ in 0..<30 {
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == child.processIdentifier,
                let focused = AX.element(application, kAXFocusedWindowAttribute), CFEqual(focused, window) {
-                try await check(application, window)
-                return
+                // Activation and menu validation can complete on different
+                // run-loop turns. Do not mistake initial disabled items for
+                // an app without native tiling support.
+                if !nativeMenu || AX.element(application, kAXMenuBarAttribute).map({ menuItemEnabled(in: $0, identifier: "_zoomLeft:") }) == true {
+                    try await check(application, window)
+                    return
+                }
             }
             try await Task.sleep(for: .milliseconds(100))
         }
         throw ArrangeError("Fixture did not become active")
     }
 
-    private static func untileEnabled(in element: AXUIElement) -> Bool {
-        if AX.string(element, kAXIdentifierAttribute) == "_zoomUntile:" { return AX.bool(element, kAXEnabledAttribute) }
-        return (AX.value(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).contains { untileEnabled(in: $0) }
+    private static func menuItemEnabled(in element: AXUIElement, identifier: String) -> Bool {
+        if AX.string(element, kAXIdentifierAttribute) == identifier { return AX.bool(element, kAXEnabledAttribute) }
+        return (AX.value(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).contains { menuItemEnabled(in: $0, identifier: identifier) }
     }
 }
 #endif
