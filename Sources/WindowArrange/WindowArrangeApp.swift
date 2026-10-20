@@ -3,9 +3,41 @@ import AppKit
 import ApplicationServices
 import ArrangementCore
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let model = AppModel()
+    private var mainWindow: NSWindow?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Also stay out of the Dock when launched directly with `swift run`.
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationDidFinishLaunching(_ notification: Notification) { NSApp.activate(ignoringOtherApps: true) }
+
+    func showMainWindow() {
+        if mainWindow == nil {
+            // Create on demand so macOS 14 also launches without opening a window.
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1140, height: 760),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered, defer: false
+            )
+            window.title = "Window Arrange"
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isReleasedWhenClosed = false
+            window.isRestorable = false
+            window.contentView = NSHostingView(rootView: ContentView().environmentObject(model)
+                .frame(minWidth: 960, minHeight: 640))
+            window.contentMinSize = NSSize(width: 960, height: 640)
+            window.center()
+            mainWindow = window
+        }
+        if mainWindow?.isMiniaturized == true { mainWindow?.deminiaturize(nil) }
+        mainWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }
 
 @main
@@ -71,30 +103,23 @@ struct Launcher {
 
 struct WindowArrangeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = AppModel()
     var body: some Scene {
-        Window("Window Arrange", id: "main") {
-            ContentView().environmentObject(model)
-                .frame(minWidth: 960, minHeight: 640)
+        MenuBarExtra("Window Arrange", systemImage: "rectangle.3.group") {
+            MenuContent(openMainWindow: delegate.showMainWindow).environmentObject(delegate.model)
         }
-        .defaultSize(width: 1140, height: 760)
-        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Snapshotを保存") { Task { await model.capture() } }.disabled(model.busy)
+                Button("Snapshotを保存") { Task { await delegate.model.capture() } }.disabled(delegate.model.busy)
             }
-        }
-        MenuBarExtra("Window Arrange", systemImage: "rectangle.3.group") {
-            MenuContent().environmentObject(model)
         }
     }
 }
 
 private struct MenuContent: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.openWindow) var openWindow
+    let openMainWindow: () -> Void
     var body: some View {
-        Button("Window Arrangeを開く") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+        Button("Window Arrangeを開く", action: openMainWindow)
         Divider()
         Button("Snapshotを保存") { Task { await model.capture() } }.disabled(model.busy)
         if let snapshot = model.selected {
