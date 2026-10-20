@@ -16,16 +16,46 @@ Swift / SwiftUIで作成したmacOS用ウィンドウ配置アプリです。外
 
 ## ビルド・起動
 
-必要環境：macOS 14以降、Swift 6以降のXcodeまたはCommand Line Tools。
+必要環境：macOS 14以降、Swift 6以降のXcodeまたはCommand Line Tools、Bun。アプリ本体はSwift / SwiftUI、開発ツールはBun上で実行するTypeScriptです。追加のnpmパッケージは不要です。
 
 ```sh
-./scripts/build-app.sh
+bun run build
 open "dist/Window Arrange.app"
 ```
 
-デバッグ版は `./scripts/build-app.sh debug`。SwiftPMの追加サンドボックスを起動できないビルド環境では、`WINDOW_ARRANGE_NESTED_SANDBOX=1 ./scripts/build-app.sh` を使います。
+デバッグ版は `bun run build debug`。SwiftPMの追加サンドボックスを起動できないビルド環境では、`WINDOW_ARRANGE_NESTED_SANDBOX=1 bun run build` を使います。
 
-生成されるアプリはローカル実行向けのad-hoc署名です。ほかのMacへの配布ではDeveloper ID署名と公証を別途設定してください。開発中の再ビルドでコード署名が変わると、アクセシビリティ権限の再登録が必要になることがあります。
+署名の初期設定前はローカル実行向けのad-hoc署名です。開発モードの初期設定後は、通常のビルドでも同じ開発用証明書を自動で再利用します。ほかのMacへの配布ではDeveloper ID署名と公証を別途設定してください。
+
+## 開発モード
+
+Pythonやシェルスクリプト、追加のファイル監視ツールは使用しません。
+
+```sh
+bun run dev
+```
+
+初回だけプロジェクト専用の自己署名コード署名証明書を作成します。既存の `.local/signing/` がある場合は、その証明書を再利用します。その後、デバッグ版をビルドして `dist/Window Arrange.app` を起動します。
+
+監視には[Bun標準の `--watch`](https://bun.com/docs/runtime/watch-mode)を使用します。Swift・リソースファイルをテキストとしてimportし、`Sources/`・`Resources/`・`scripts/`・`Package.swift`・`package.json` の変更時に開発用ワーカーを再実行します。ファイル追加・削除・名前変更では、Bunの `node:fs.watch` でimport一覧を更新します。ポーリングは行いません。
+
+保存が約0.7秒落ち着いたところで差分ビルドし、署名・検証に成功した場合にアプリを終了・更新・再起動します。ビルドはwatch対象のワーカーとは別の親プロセスが管理します。ビルド中に追加変更があると古いビルドを中断し、後処理が終わってから最新版でやり直します。コンパイルや署名に失敗した場合は、起動中のアプリをそのまま残して次の保存時に再試行します。ビルド済みアプリの差し替え中は、その更新が完了してから次のビルドに進みます。開発ツール自体のロジックを変更した場合は `bun run dev` を起動し直してください。
+
+開発モードではメインウィンドウが自動で開き、直前の表示セクションとウィンドウ位置・サイズを引き継ぎます。終了はターミナルで `Ctrl+C`。監視を終了してもアプリは引き続き利用できます。更新時に終了するのはこのプロジェクトの `dist/Window Arrange.app` だけです。同じアプリを別の場所から起動している場合は、そのアプリを終了してから開発モードを使ってください。
+
+**初回に署名方式を切り替えたときは、アクセシビリティの許可を一度更新してください。** 設定画面でオンでも認識されない場合は、既存のWindow Arrangeの登録を削除して `dist/Window Arrange.app` を追加し直します。その後は同じ証明書・アプリID・配置先を使い続け、再ビルドによる許可の再設定を減らします。証明書や配置先の変更、macOS側での権限取り消しなどでは再許可が必要になる場合があります。開発モードが権限を自動付与することはありません。
+
+証明書と秘密鍵はプロジェクト内の `.local/signing/development.keychain-db`、解除用パスワードは同じディレクトリ内の `password` に保存します。このディレクトリは所有ユーザーだけがアクセスでき、Gitからも除外しています。証明書の信頼設定やシステム全体の設定は変更しません。秘密鍵はインポート時に `/usr/bin/codesign` からの利用を許可します。**`.local/signing/` はビルドキャッシュと一緒に削除しないでください。** 消して作り直すと署名が変わり、再許可が必要になります。初期設定が途中で失敗した場合は同じコマンドで再試行できますが、証明書のインポート前に停止した場合は、案内に従い `.local/signing/` の状態を確認してください。既存の証明書は自動で作り直しません。
+
+```sh
+bun run dev:setup          # 署名の初期設定だけ行う
+bun run dev:once           # 1回ビルド・更新・再起動する
+bun run dev:once --no-open # 1回更新する（起動中なら終了し、再起動しない）
+```
+
+既存のApple Development等の証明書を使う場合は、`WINDOW_ARRANGE_SIGNING_IDENTITY` に証明書名またはSHA-1識別子を指定できます。必要に応じて `WINDOW_ARRANGE_SIGNING_KEYCHAIN` も指定してください。この場合は通常のビルドにも同じ環境変数を設定します。開発モードではad-hoc署名へのフォールバックを禁止しています。
+
+SwiftPMの追加サンドボックスを起動できない環境では、`WINDOW_ARRANGE_NESTED_SANDBOX=1 bun run dev` を使います。macOSのディレクトリ監視やキーチェーンへのアクセスが制限される実行環境では、通常のターミナルから実行してください。
 
 ## 使い方
 
@@ -93,19 +123,19 @@ VS Codeなどが非表示Spaceのウィンドウを`AXWindows`から除外して
 ## 検証
 
 ```sh
-./scripts/test.sh
+bun run test
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --diagnostics
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --restore-diagnostics
 ```
 
-Swift Testingで座標変換、モニター選択、ウィンドウ照合、JSONの保存・読み込み、破損データ、キー競合判定を確認します。`--diagnostics` は権限やSpaceシンボルの検出状況を読み取り、ウィンドウ操作や保存はしません。
+Swift Testingで座標変換、モニター選択、ウィンドウ照合、JSONの保存・読み込み、破損データ、キー競合判定を確認します。Bun標準のテストランナーで開発モードの失敗・中断時のアプリ維持、署名検証と更新の順序、二重起動防止、Swiftファイルの編集・追加・削除による実際の `bun --watch` 再実行を確認します。開発ツールのテストだけなら `bun run test:tools` を実行できます。`--diagnostics` は権限やSpaceシンボルの検出状況を読み取り、ウィンドウ操作や保存はしません。
 
 `--restore-diagnostics` は、既存Snapshotと現在のウィンドウを照合し、アプリごとの保存数・現在数・照合数と、見つからないSpaceの数を表示します。WindowServerにだけ現れる非表示Spaceのウィンドウ数と、それを含めた照合数も表示します。Spaceの表示切り替え・ウィンドウの移動・設定保存は行いません。
 
 デバッグ版には、自分自身が生成する使い捨てのウィンドウだけを操作する統合チェックも含めています。実行にはアクセシビリティ権限と、Spaces間の検証用に既存の通常デスクトップ2つが必要です。権限は自動的に付与しません。
 
 ```sh
-./scripts/build-app.sh debug
+bun run build debug
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --integration-check
 ```
 

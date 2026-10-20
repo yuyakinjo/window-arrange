@@ -2,11 +2,15 @@ import SwiftUI
 import AppKit
 import ApplicationServices
 import ArrangementCore
+import Darwin
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private var mainWindow: NSWindow?
+    #if DEBUG
+    private var developmentTermination: DispatchSourceSignal?
+    #endif
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Also stay out of the Dock when launched directly with `swift run`.
@@ -14,6 +18,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--development") {
+            // Let the Bun development runner request a normal app shutdown with SIGTERM.
+            signal(SIGTERM, SIG_IGN)
+            let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+            termination.setEventHandler { NSApp.terminate(nil) }
+            termination.resume()
+            developmentTermination = termination
+            if let section = UserDefaults.standard.string(forKey: "developmentSection"),
+               ["snapshots", "shortcuts", "settings"].contains(section) {
+                model.section = section
+            }
+            showMainWindow()
+        }
+        #endif
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--development") {
+            UserDefaults.standard.set(model.section, forKey: "developmentSection")
+        }
+        #endif
+    }
 
     func showMainWindow() {
         if mainWindow == nil {
@@ -32,6 +62,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .frame(minWidth: 960, minHeight: 640))
             window.contentMinSize = NSSize(width: 960, height: 640)
             window.center()
+            #if DEBUG
+            if CommandLine.arguments.contains("--development") {
+                window.setFrameAutosaveName("developmentMainWindow")
+            }
+            #endif
             mainWindow = window
         }
         if mainWindow?.isMiniaturized == true { mainWindow?.deminiaturize(nil) }
@@ -78,6 +113,10 @@ struct Launcher {
                 exit(status)
             }
             app.run()
+            return
+        }
+        if CommandLine.arguments.dropFirst().elementsEqual(["--development"]) {
+            WindowArrangeApp.main()
             return
         }
         #endif

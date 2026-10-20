@@ -1,0 +1,13 @@
+{
+  "name": "window-arrange-dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun scripts/dev.ts",
+    "dev:setup": "bun scripts/dev.ts --setup",
+    "dev:once": "bun scripts/dev.ts --once",
+    "build": "bun scripts/build.ts",
+    "test": "bun scripts/test.ts",
+    "test:tools": "bun test scripts/tests"
+  }
+}

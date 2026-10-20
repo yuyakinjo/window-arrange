@@ -78,6 +78,11 @@ struct ContentView: View {
                 Text("いつもの配置へ、\nワンアクション。").font(.callout.weight(.medium)).lineSpacing(4)
                 Text("ローカルに保存。\n外部アプリは不要です。").font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             }.padding(15).frame(maxWidth: .infinity, alignment: .leading).background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+            #if DEBUG
+            if CommandLine.arguments.contains("--development") {
+                Label("開発モード", systemImage: "hammer").font(.caption2).foregroundStyle(accent).padding(.top, 16)
+            }
+            #endif
             Text("Window Arrange  \(appVersion)").font(.caption2).foregroundStyle(.tertiary).padding(.top, 16)
         }
         .padding(.horizontal, 20).padding(.bottom, 20).frame(width: 205)
