@@ -54,7 +54,7 @@ final class NativeSpaces {
     }
     var available: Bool { connection != nil && copyDisplays != nil && copySpaces != nil && getWindow != nil && (moveWindows != nil || bridgeOperation != nil || hasBridgeEntryPoint) }
 
-    func spaces() throws -> [LiveSpace] {
+    func spaces(includeFullscreen: Bool = false) throws -> [LiveSpace] {
         guard available, let connection, let copyDisplays,
               let raw = copyDisplays(connection())?.takeRetainedValue() as? [[String: Any]] else {
             throw ArrangeError("このmacOSではSpaces情報を取得できません。設定でSpacesの記録をオフにすると位置・サイズのみ保存できます。")
@@ -65,8 +65,8 @@ final class NativeSpaces {
             for space in display["Spaces"] as? [[String: Any]] ?? [] {
                 guard let number = space["id64"] as? NSNumber, let type = space["type"] as? NSNumber else { continue }
                 index += 1
-                guard type.intValue == 0, let uuid = space["uuid"] as? String, !uuid.isEmpty else { continue }
-                result.append(LiveSpace(record: SpaceRecord(id: uuid, index: index, label: "デスクトップ \(index)", displayID: displayID), runtimeID: number.uint64Value))
+                guard (type.intValue == 0 || includeFullscreen), let uuid = space["uuid"] as? String, !uuid.isEmpty else { continue }
+                result.append(LiveSpace(record: SpaceRecord(id: uuid, index: index, label: type.intValue == 0 ? "デスクトップ \(index)" : "フルスクリーン \(index)", displayID: displayID), runtimeID: number.uint64Value))
             }
         }
         guard !result.isEmpty else { throw ArrangeError("通常のデスクトップを取得できませんでした。Spaces連携はこの環境では利用できません。") }
@@ -77,7 +77,7 @@ final class NativeSpaces {
         guard let getWindow, getWindow(element, &id) == 0, id != 0 else { return nil }
         return id
     }
-    private func memberships(_ id: UInt32) -> [UInt64] {
+    func memberships(_ id: UInt32) -> [UInt64] {
         guard let connection, let copySpaces,
               let values = copySpaces(connection(), 0x7, [NSNumber(value: id)] as CFArray)?.takeRetainedValue() as? [NSNumber] else { return [] }
         return values.map(\.uint64Value)
@@ -88,9 +88,9 @@ final class NativeSpaces {
         guard ids.count == 1 else { return nil }
         return try? spaces().first { $0.runtimeID == ids[0] }
     }
-    func activeSpaces() throws -> [LiveSpace] {
+    func activeSpaces(includeFullscreen: Bool = false) throws -> [LiveSpace] {
         guard let connection, let currentSpace else { throw ArrangeError("表示中のSpaceを取得できませんでした。") }
-        let all = try spaces()
+        let all = try spaces(includeFullscreen: includeFullscreen)
         let displays = Set(all.map { $0.record.displayID })
         let active = all.filter { currentSpace(connection(), $0.record.displayID as CFString) == $0.runtimeID }
         guard active.count == displays.count else {
@@ -99,8 +99,8 @@ final class NativeSpaces {
         return active
     }
     @MainActor
-    func activate(_ uuid: String) async throws {
-        guard let connection, let currentSpace, let target = try spaces().first(where: { $0.record.id == uuid }) else {
+    func activate(_ uuid: String, includeFullscreen: Bool = false) async throws {
+        guard let connection, let currentSpace, let target = try spaces(includeFullscreen: includeFullscreen).first(where: { $0.record.id == uuid }) else {
             throw ArrangeError("表示するSpaceが見つかりませんでした。")
         }
         if currentSpace(connection(), target.record.displayID as CFString) == target.runtimeID { return }

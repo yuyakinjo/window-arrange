@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        model.openMainWindow = { [weak self] in self?.showMainWindow() }
+        model.switcher.start()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             // Let the Bun development runner request a normal app shutdown with SIGTERM.
@@ -29,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             termination.resume()
             developmentTermination = termination
             if let section = UserDefaults.standard.string(forKey: "developmentSection"),
-               ["snapshots", "shortcuts", "settings"].contains(section) {
+               ["snapshots", "shortcuts", "switcher", "settings"].contains(section) {
                 model.section = section
             }
             showMainWindow()
@@ -38,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        model.switcher.stop()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             UserDefaults.standard.set(model.section, forKey: "developmentSection")
@@ -89,6 +92,22 @@ struct Launcher {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--switcher-fixture"), CommandLine.arguments.indices.contains(index + 1) {
+            SwitcherIntegrationCheck.fixture(prefix: CommandLine.arguments[index + 1]); return
+        }
+        if CommandLine.arguments.contains("--switcher-preview") {
+            let app = NSApplication.shared; app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                do { try WindowSwitcherController.integrationPreview(); print("PASS: switcher previews rendered"); fflush(stdout); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); fflush(stdout); exit(1) }
+            }
+            app.run(); return
+        }
+        if CommandLine.arguments.contains("--switcher-check") {
+            let app = NSApplication.shared; app.setActivationPolicy(.accessory)
+            Task { @MainActor in let status = await SwitcherIntegrationCheck.run(); fflush(stdout); exit(status) }
+            app.run(); return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--restore-saved-window"), CommandLine.arguments.indices.contains(index + 1),
            let id = UUID(uuidString: CommandLine.arguments[index + 1]) {
             let app = NSApplication.shared
@@ -160,6 +179,7 @@ private struct MenuContent: View {
     let openMainWindow: () -> Void
     var body: some View {
         Button("Window Arrangeを開く", action: openMainWindow)
+        Button("ウィンドウを切り替える") { model.switcher.show() }.disabled(!model.data.switcher.enabled)
         Divider()
         Button("Snapshotを保存") { Task { await model.capture() } }.disabled(model.busy)
         if let snapshot = model.selected {

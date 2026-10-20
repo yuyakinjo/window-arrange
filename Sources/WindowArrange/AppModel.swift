@@ -21,14 +21,17 @@ final class AppModel: ObservableObject {
     @Published var report: OperationReport?
     @Published var recording: WindowAction? {
         didSet {
-            if recording != nil { hotKeys.suspend() }
+            if recording != nil { hotKeys.suspend(); switcher.suspend(true) }
             else { resumeHotKeys() }
         }
     }
+    var openMainWindow: (() -> Void)?
     @Published private(set) var shortcutFailures: [String] = []
     @Published private(set) var storageAvailable = true
     let accessibility = AccessibilityService()
     let nativeSpaces = NativeSpaces()
+    let switcher = WindowSwitcherController()
+    let loginItem = LoginItemController()
     private let hotKeys = HotKeyManager()
     private let store: DataStore
     private var timer: Timer?
@@ -47,9 +50,16 @@ final class AppModel: ObservableObject {
         hotKeys.onTrigger = { [weak self] action in
             Task { @MainActor in await self?.perform(action) }
         }
+        switcher.onError = { [weak self] error in self?.show(error); self?.openMainWindow?() }
+        switcher.requestAccessibility = { [weak self] in self?.accessibility.requestAccess() }
+        switcher.isBusy = { [weak self] in self?.busy == true || self?.recording != nil }
         resumeHotKeys()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.trusted = AXIsProcessTrusted() }
+            Task { @MainActor in
+                guard let self else { return }
+                let trusted = AXIsProcessTrusted()
+                if trusted != self.trusted { self.trusted = trusted; self.switcher.permissionsChanged() }
+            }
         }
     }
     func update(_ transform: (inout AppData) -> Void) throws {
@@ -82,6 +92,10 @@ final class AppModel: ObservableObject {
     func setShortcut(_ shortcut: Shortcut?, action: WindowAction) {
         do {
             if let shortcut {
+                var reverse = data.switcher.summon; reverse.modifiers |= 512
+                if data.switcher.enabled && (shortcut.conflicts(with: data.switcher.summon) || shortcut.conflicts(with: reverse)) {
+                    throw ArrangeError("ウィンドウ切替の呼び出しキーと重複しています。")
+                }
                 if let duplicate = data.shortcuts.first(where: { $0.key != action.rawValue && $0.value.conflicts(with: shortcut) }) {
                     throw ArrangeError("このキーは「\(WindowAction(rawValue: duplicate.key)?.title ?? duplicate.key)」に割り当て済みです。")
                 }
@@ -93,7 +107,33 @@ final class AppModel: ObservableObject {
         recording = nil
         resumeHotKeys()
     }
-    func resumeHotKeys() { shortcutFailures = hotKeys.configure(data.shortcuts) }
+    func resumeHotKeys() {
+        shortcutFailures = hotKeys.configure(data.shortcuts)
+        switcher.suspend(false)
+        switcher.configure(data.switcher)
+    }
+    func suspendForSwitcherRecording() { hotKeys.suspend(); switcher.suspend(true) }
+    func resumeAfterSwitcherRecording() { resumeHotKeys() }
+    func setSwitcherSettings(_ settings: SwitcherSettings) {
+        var reverse = settings.summon; reverse.modifiers |= 512
+        if settings.enabled && data.shortcuts.values.contains(where: { $0.conflicts(with: settings.summon) || $0.conflicts(with: reverse) }) {
+            show(ArrangeError("ウィンドウ切替の呼び出しキーが配置ショートカットと重複しています。")); return
+        }
+        do { try update { $0.switcher = settings }; switcher.configure(settings) } catch { show(error) }
+    }
+    func setSwitcherShortcut(_ shortcut: Shortcut, command: SwitcherCommand) throws {
+        if command == .summon {
+            guard shortcut.modifiers & (256 | 2048 | 4096) != 0 else { throw ArrangeError("呼び出しキーには⌥・⌘・⌃のいずれかを含めてください。") }
+            var reverse = shortcut; reverse.modifiers |= 512
+            if let action = data.shortcuts.first(where: { $0.value.conflicts(with: shortcut) || $0.value.conflicts(with: reverse) }) {
+                throw ArrangeError("「\(WindowAction(rawValue: action.key)?.title ?? action.key)」の配置ショートカットと重複しています。")
+            }
+        }
+        if let conflict = data.switcher.conflict(for: shortcut, command: command) { throw ArrangeError("「\(conflict.title)」とキーが重複しています。") }
+        if command == .summon { try switcher.validateSummon(shortcut) }
+        var settings = data.switcher; settings[command] = shortcut
+        try update { $0.switcher = settings }
+    }
     func show(_ error: Error) { report = OperationReport(title: "操作を完了できませんでした", message: error.localizedDescription) }
 
     func perform(_ action: WindowAction) async {

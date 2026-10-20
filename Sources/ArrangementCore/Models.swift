@@ -42,7 +42,7 @@ public struct Shortcut: Codable, Equatable {
     }
 }
 
-public struct DisplayRecord: Codable, Identifiable {
+public struct DisplayRecord: Codable, Identifiable, Sendable {
     public var id: String
     public var name: String
     public var frame: CGRect
@@ -103,11 +103,12 @@ public struct AppData: Codable {
     public var shortcuts: [String: Shortcut] = [:]
     public var selectedSnapshotID: UUID?
     public var spacesEnabled = true
+    public var switcher = SwitcherSettings()
     public var repeatMode: LayoutRepeatMode = .none
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case version, snapshots, shortcuts, selectedSnapshotID, spacesEnabled, repeatMode
+        case version, snapshots, shortcuts, selectedSnapshotID, spacesEnabled, repeatMode, switcher
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -116,6 +117,7 @@ public struct AppData: Codable {
         shortcuts = try values.decode([String: Shortcut].self, forKey: .shortcuts)
         selectedSnapshotID = try values.decodeIfPresent(UUID.self, forKey: .selectedSnapshotID)
         spacesEnabled = try values.decode(Bool.self, forKey: .spacesEnabled)
+        switcher = try values.decodeIfPresent(SwitcherSettings.self, forKey: .switcher) ?? SwitcherSettings()
         repeatMode = try values.decodeIfPresent(LayoutRepeatMode.self, forKey: .repeatMode) ?? .none
     }
 }

@@ -16,7 +16,8 @@ struct ContentView: View {
                 header
                 Divider()
                 if !model.trusted { permissionBanner }
-                if model.section == "shortcuts" { ShortcutsView() }
+                if model.section == "switcher" { SwitcherSettingsView(controller: model.switcher, thumbnails: model.switcher.thumbnails) }
+                else if model.section == "shortcuts" { ShortcutsView() }
                 else if model.section == "settings" { SettingsView() }
                 else { SnapshotsView() }
                 Divider()
@@ -70,6 +71,7 @@ struct ContentView: View {
             }.padding(.top, 48).padding(.bottom, 36)
             Text("WORKSPACE").font(.system(size: 10, weight: .semibold)).tracking(1.7).foregroundStyle(.tertiary).padding(.bottom, 12)
             nav("snapshots", "Snapshots", "square.stack.3d.up", count: model.data.snapshots.count)
+            nav("switcher", "ウィンドウ切替", "rectangle.on.rectangle")
             nav("shortcuts", "ショートカット", "command")
             nav("settings", "設定", "slider.horizontal.3")
             Spacer()
@@ -103,8 +105,8 @@ struct ContentView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 5) {
-                Text(model.section == "snapshots" ? "Snapshots" : model.section == "shortcuts" ? "ショートカット" : "設定").font(.system(size: 27, weight: .bold))
-                Text(model.section == "snapshots" ? "作業環境を記録して、好きなときに呼び戻す。" : model.section == "shortcuts" ? "指先から、ウィンドウを思いどおりに。" : "自分のMacに合わせて、使いやすく。").font(.callout).foregroundStyle(.secondary)
+                Text(model.section == "snapshots" ? "Snapshots" : model.section == "shortcuts" ? "ショートカット" : model.section == "switcher" ? "ウィンドウ切替" : "設定").font(.system(size: 27, weight: .bold))
+                Text(model.section == "snapshots" ? "作業環境を記録して、好きなときに呼び戻す。" : model.section == "shortcuts" ? "指先から、ウィンドウを思いどおりに。" : model.section == "switcher" ? "使いたいウィンドウへ、すばやく。" : "自分のMacに合わせて、使いやすく。").font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
             Button { Task { await model.capture() } } label: { Label("Snapshotを保存", systemImage: "plus") }
@@ -359,6 +361,7 @@ private struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         Form {
+            LoginItemSettings(login: model.loginItem)
             Section("ウィンドウの操作") {
                 LabeledContent("アクセシビリティ", value: model.trusted ? "許可済み" : "未許可")
                 Button("システム設定を開く") { model.accessibility.requestAccess() }
@@ -398,5 +401,22 @@ private struct RepeatModePicker: View {
             Text("Cycle は同じ画面で 1/2 → 2/3 → 1/3 を繰り返します。Cycle Displays は半画面ずつ移動します。右半分なら「この画面の右 → 次の画面の左 → 右 → …」と巡回します。開いているMacBookの内蔵画面も対象です。None はmacOS標準の半分配置を優先し、標準機能が使えないアプリでは座標を指定して配置します。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+private struct LoginItemSettings: View {
+    @ObservedObject var login: LoginItemController
+    var body: some View {
+        Section("起動") {
+            Toggle("ログイン時にWindow Arrangeを起動", isOn: Binding(get: { login.enabled }, set: { login.setEnabled($0) }))
+                .disabled(login.changing)
+            if login.needsApproval {
+                Text("システム設定のログイン項目で許可を完了してください。").font(.caption).foregroundStyle(.secondary)
+                Button("ログイン項目の設定を開く") { login.openSettings() }
+            }
+            if let error = login.error { Text(error).font(.caption).foregroundStyle(.red) }
+        }
+        .onAppear { login.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in login.refresh() }
     }
 }
