@@ -72,6 +72,9 @@ final class SwitcherScanner: @unchecked Sendable {
                 let memberships = Set(spaces.memberships(id))
                 let space = allSpaces.first { memberships.contains($0.runtimeID) }
                 let title = ax.map { AX.string($0, kAXTitleAttribute) }.flatMap { $0.isEmpty ? nil : $0 } ?? entry?[kCGWindowName as String] as? String ?? ""
+                // macOS exposes its tile divider as a layer-zero WindowServer
+                // window, but it is not an application window we can focus.
+                if appID == "com.apple.WindowManager", title == "Tiling Handle Window" { continue }
                 let info = SwitcherWindow(id: key(id), appID: appID, appName: app.localizedName ?? appID, title: title, frame: frame,
                     screenID: space?.record.displayID ?? Layout.display(for: frame, in: displays)?.id ?? "", spaces: memberships,
                     spaceIndex: space?.record.index ?? 0, minimized: ax.map { AX.bool($0, kAXMinimizedAttribute) } ?? false,

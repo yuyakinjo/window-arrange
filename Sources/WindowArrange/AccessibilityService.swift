@@ -192,14 +192,13 @@ final class AccessibilityService {
         if let failure { throw failure }
         return try await windows(spaces: spaces, requireKnownSpace: false).windows
     }
-    func focusedWindow() throws -> AXUIElement {
-        try requireAccess()
+    func focusedWindow() throws -> AXUIElement? {
         guard let app = NSWorkspace.shared.frontmostApplication else {
             throw ArrangeError("操作したいアプリを前面にしてショートカットを押してください。")
         }
-        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            throw ArrangeError("Window Arrange自身のウィンドウは操作対象外です。操作したい別のアプリを前面にしてショートカットを押してください。")
-        }
+        // Shortcuts pressed in our own UI are an intentional no-op.
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        try requireAccess()
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.25)
         guard let window = AX.element(application, kAXFocusedWindowAttribute) else { throw ArrangeError("操作できるウィンドウがありません。") }
@@ -207,7 +206,7 @@ final class AccessibilityService {
         return window
     }
     func perform(_ action: WindowAction, repeatMode: LayoutRepeatMode = .none) async throws {
-        let window = try focusedWindow()
+        guard let window = try focusedWindow() else { return }
         if action == .minimize { try AX.setBool(window, kAXMinimizedAttribute, true); return }
         if action == .fullscreen { try AX.setBool(window, "AXFullScreen", !AX.bool(window, "AXFullScreen")); return }
         guard !AX.bool(window, "AXFullScreen") else { throw ArrangeError("フルスクリーンを解除してから配置してください。") }
