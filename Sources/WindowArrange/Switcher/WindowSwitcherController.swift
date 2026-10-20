@@ -11,7 +11,11 @@ final class WindowSwitcherController: ObservableObject {
     @Published private(set) var isOpen = false
     @Published private(set) var loading = false
     @Published private(set) var shortcutError: String?
+    @Published private(set) var previewWindows: [TrackedSwitcherWindow] = []
+    @Published private(set) var previewLoading = false
+    @Published private(set) var previewAppName: String?
     let thumbnails = SwitcherThumbnails()
+    let previewThumbnails = SwitcherThumbnails()
     private let tracker = SwitcherWindowTracker()
     private let keyboard = SwitcherKeyboard()
     private let spaces = NativeSpaces()
@@ -20,6 +24,8 @@ final class WindowSwitcherController: ObservableObject {
     private var panel: SwitcherPanel?
     private var selection = SwitcherSelection()
     private var context = SwitcherContext()
+    private var previewContext = SwitcherContext()
+    private var settingsPreviewVisible = false
     private var initialSelection = false
     private var backwards = false
     private var pendingMoves = 0
@@ -50,12 +56,53 @@ final class WindowSwitcherController: ObservableObject {
         tracker.isSuspended = { [weak self] in self?.isBusy?() == true }
     }
     func start() { started = true; if settings.enabled { tracker.start() } }
-    func stop() { started = false; dismiss(); cancelFocus(); tracker.stop(); keyboard.stop() }
+    func stop() { started = false; endSettingsPreview(); dismiss(); cancelFocus(); tracker.stop(); keyboard.stop() }
     func configure(_ settings: SwitcherSettings) {
         dismiss(); cancelFocus(); self.settings = settings
-        if started { if settings.enabled { tracker.start() } else { tracker.stop() } }
+        if started || settingsPreviewVisible {
+            if settings.enabled || settingsPreviewVisible { tracker.start() } else { tracker.stop() }
+        }
         do { try keyboard.configure(settings); shortcutError = nil }
         catch { shortcutError = error.localizedDescription }
+        rebuildSettingsPreview()
+    }
+    func beginSettingsPreview() {
+        settingsPreviewVisible = true
+        previewLoading = AXIsProcessTrusted() && tracker.inventory.windows.isEmpty
+        // Capture the pointer context once, so moving across settings controls does
+        // not change the meaning of the under-cursor filters on every edit.
+        previewContext.cursorApp = tracker.inventory.cursorApp
+        previewContext.cursorWindows = tracker.inventory.cursorWindows
+        rebuildSettingsPreview()
+        tracker.start()
+    }
+    func endSettingsPreview() {
+        settingsPreviewVisible = false
+        previewThumbnails.cancel()
+        if !started || !settings.enabled { tracker.stop() }
+    }
+    private func rebuildSettingsPreview() {
+        guard settingsPreviewVisible else { return }
+        let inventory = tracker.inventory
+        let active = inventory.windows.first { $0.info.id == inventory.activeWindow }
+            ?? inventory.windows.filter { !$0.info.windowless }.max { $0.info.focused < $1.info.focused }
+        // The settings app itself is intentionally absent from the inventory.
+        // Use the last application window while the user is editing settings.
+        let front = NSWorkspace.shared.frontmostApplication
+        let externalFront = front.flatMap { app in
+            app.processIdentifier != getpid() && app.activationPolicy == .regular
+                && inventory.windows.contains(where: { $0.app.processIdentifier == app.processIdentifier }) ? app : nil
+        }
+        previewContext.activeApp = externalFront.map { $0.bundleIdentifier ?? "pid.\($0.processIdentifier)" } ?? active?.info.appID
+        previewContext.activeWindow = active?.info.id
+        previewContext.visibleSpaces = inventory.visibleSpaces
+        previewContext.screenID = active?.info.screenID ?? screenID(preferredScreen(inventory: inventory))
+        previewAppName = externalFront?.localizedName ?? active?.info.appName
+        let ordered = SwitcherList.windows(inventory.windows.map(\.info), settings: settings, context: previewContext)
+        let byID = Dictionary(uniqueKeysWithValues: inventory.windows.map { ($0.info.id, $0) })
+        previewWindows = ordered.compactMap { byID[$0.id] }
+        if settings.style == .thumbnails { previewThumbnails.load(previewWindows) }
+        else { previewThumbnails.cancel() }
     }
     func validateSummon(_ shortcut: Shortcut) throws { try keyboard.validateSummon(shortcut) }
     func beginShortcutRecording(_ receive: @escaping (Shortcut) -> Void) throws { try keyboard.beginShortcutRecording(receive) }
@@ -128,6 +175,12 @@ final class WindowSwitcherController: ObservableObject {
     }
     private func release() { if isOpen && settings.release == .focus { commit() } }
     private func inventoryChanged() {
+        if settingsPreviewVisible && previewLoading {
+            previewContext.cursorApp = tracker.inventory.cursorApp
+            previewContext.cursorWindows = tracker.inventory.cursorWindows
+        }
+        previewLoading = false
+        rebuildSettingsPreview()
         guard isOpen else { return }
         loading = false
         if !initialSelection {
@@ -391,28 +444,41 @@ private struct SwitcherOverlay: View {
     private func tile(_ window: TrackedSwitcherWindow) -> some View {
         let selected = controller.selectedID == window.info.id
         return Button { controller.choose(window.info.id) } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8).fill(.primary.opacity(0.04))
-                    if controller.settings.style == .thumbnails, let image = thumbnails.images[window.info.id] {
-                        Image(nsImage: image).resizable().scaledToFit().padding(4)
-                    } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(24) }
-                }.frame(height: controller.settings.style == .thumbnails ? 125 : 95)
-                HStack(spacing: 7) {
-                    Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().frame(width: 20, height: 20)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(window.info.title.isEmpty ? window.info.appName : window.info.title).font(.callout.weight(.medium)).lineLimit(1)
-                        Text(window.info.appName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }
-            }.padding(10).frame(height: tileHeight)
-                .background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1))
-                .contentShape(RoundedRectangle(cornerRadius: 12))
+            SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
+                               style: controller.settings.style, selected: selected)
         }.buttonStyle(.plain)
             .accessibilityLabel("\(window.info.appName)、\(window.info.title)")
             .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+}
+
+struct SwitcherWindowTile: View {
+    let window: TrackedSwitcherWindow
+    let image: NSImage?
+    let style: SwitcherStyle
+    var selected = false
+    var compact = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8).fill(.primary.opacity(0.04))
+                if style == .thumbnails, let image = image {
+                    Image(nsImage: image).resizable().scaledToFit().padding(4)
+                } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(compact ? 12 : 24) }
+            }.frame(height: style == .thumbnails ? (compact ? 72 : 125) : (compact ? 52 : 95))
+            HStack(spacing: 7) {
+                Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().frame(width: 20, height: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(window.info.title.isEmpty ? window.info.appName : window.info.title).font(.callout.weight(.medium)).lineLimit(1)
+                    Text(window.info.appName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+        }.padding(10).frame(height: compact ? (style == .thumbnails ? 137 : 117) : (style == .thumbnails ? 190 : 160))
+            .background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

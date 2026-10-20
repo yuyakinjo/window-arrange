@@ -21,12 +21,21 @@ struct SwitcherInventory {
 /// AX queries run on one worker. Cache keys contain the launch date as well as the PID,
 /// because WindowServer IDs and PIDs can both be reused after an app exits.
 final class SwitcherScanner: @unchecked Sendable {
+    // These system UI hosts expose panels (including desktop widgets) as windows.
+    // Exclude the apps before AX/WindowServer discovery and the windowless fallback.
+    private static let excludedBundleIDs: Set<String> = [
+        "com.apple.controlcenter",
+        "com.apple.notificationcenterui"
+    ]
     let spaces = NativeSpaces()
     private var elements: [String: AXUIElement] = [:]
     private var subscriptions: SwitcherAXSubscriptions?
 
     func scan(displays: [DisplayRecord], mouse: CGPoint, frontPID: pid_t?, notify: (@Sendable () -> Void)? = nil) -> SwitcherInventory {
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited && !$0.isTerminated && $0.processIdentifier != getpid() }
+        let apps = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy != .prohibited && !$0.isTerminated && $0.processIdentifier != getpid()
+                && !Self.excludedBundleIDs.contains($0.bundleIdentifier ?? "")
+        }
         let allSpaces = (try? spaces.spaces(includeFullscreen: true)) ?? []
         let visible = Set(((try? spaces.activeSpaces(includeFullscreen: true)) ?? []).map(\.runtimeID))
         let raw = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []

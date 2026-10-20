@@ -11,6 +11,17 @@ struct SwitcherSettingsView: View {
     @ViewState private var recording: SwitcherCommand?
     @ViewState private var recordingError: String?
     var body: some View {
+        HStack(spacing: 0) {
+            settingsForm.frame(minWidth: 380)
+            Divider()
+            SwitcherSettingsPreview(controller: controller, thumbnails: controller.previewThumbnails, trusted: model.trusted)
+                .frame(width: 310)
+        }
+        .onAppear { controller.beginSettingsPreview() }
+        .onDisappear { controller.endSettingsPreview() }
+    }
+
+    private var settingsForm: some View {
         Form {
             Section("ウィンドウ切替") {
                 Toggle("ウィンドウ切替を有効にする", isOn: binding(\.enabled))
@@ -48,7 +59,7 @@ struct SwitcherSettingsView: View {
                     if thumbnails.permitted, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
                     else { thumbnails.requestPermission() }
                 }
-                Text("サムネイルは一覧を開いたときに取得し、メモリ上だけに保持します。最小化・非表示・保護されたウィンドウや、選択されていないタブは画像を取得できない場合があります。")
+                Text("サムネイルは一覧やプレビューの表示中に取得し、メモリ上だけに保持します。最小化・非表示・保護されたウィンドウや、選択されていないタブは画像を取得できない場合があります。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("ショートカット") {
@@ -91,6 +102,78 @@ struct SwitcherSettingsView: View {
         Picker(title, selection: binding(key)) {
             ForEach(Array(Value.allCases)) { item in Text(item.title).tag(item) }
         }
+    }
+}
+
+private struct SwitcherSettingsPreview: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject var controller: WindowSwitcherController
+    @ObservedObject var thumbnails: SwitcherThumbnails
+    let trusted: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("プレビュー").font(.headline)
+                Spacer()
+                if trusted && !controller.previewLoading {
+                    Text("\(controller.previewWindows.count)件").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            Text("表示対象・並び順・見た目の変更をすぐに反映します。")
+                .font(.caption).foregroundStyle(.secondary)
+            if !trusted {
+                placeholder("アクセシビリティを許可すると、実際のウィンドウを確認できます。", icon: "hand.raised")
+            } else if controller.previewLoading {
+                ProgressView("ウィンドウを取得中…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if controller.previewWindows.isEmpty {
+                placeholder("表示条件に一致するウィンドウはありません", icon: "macwindow")
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
+                        ForEach(controller.previewWindows, id: \.info.id) { window in
+                            VStack(alignment: .leading, spacing: 4) {
+                                SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
+                                                   style: controller.settings.style, compact: true)
+                                Text(status(window.info)).font(.caption2).foregroundStyle(.secondary)
+                                    .lineLimit(2).padding(.horizontal, 6)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                    }.padding(3)
+                }
+            }
+            if let name = controller.previewAppName {
+                Text("「現在のアプリ」の基準：\(name)").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("カーソル下の対象は、この設定画面を開いた時点を基準にします。")
+                .font(.caption).foregroundStyle(.secondary)
+            if controller.settings.style == .thumbnails && !thumbnails.permitted {
+                Text("画面収録が未許可のため、アイコンで表示しています。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }
+        .padding(16)
+        .background(.regularMaterial)
+        .environment(\.colorScheme, controller.settings.theme == .system ? colorScheme : controller.settings.theme == .dark ? .dark : .light)
+    }
+
+    private func placeholder(_ text: String, icon: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon).font(.largeTitle)
+            Text(text).font(.callout).multilineTextAlignment(.center)
+        }.foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func status(_ window: SwitcherWindow) -> String {
+        var labels: [String] = []
+        if window.windowless { labels.append("ウィンドウなし") }
+        if window.minimized { labels.append("最小化") }
+        if window.hidden { labels.append("非表示") }
+        if window.fullscreen { labels.append("フルスクリーン") }
+        if !window.windowless && window.spaceIndex > 0 { labels.append("Space \(window.spaceIndex)") }
+        return labels.joined(separator: " · ")
     }
 }
 
