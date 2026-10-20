@@ -109,9 +109,26 @@ struct WindowSwitcherTests {
         var data = AppData(); data.switcher.apps = .underCursor; data.switcher.spaces = .other
         data.switcher.theme = .dark; data.switcher.style = .icons; data.switcher.release = .hold
         data.switcher.separateTabs = true; data.switcher.onePerApp = true
+        data.switcher.windowScale = 1.35
         data.switcher.previous = Shortcut(keyCode: 123, modifiers: 0, label: "←")
         let decoded = try JSONDecoder().decode(AppData.self, from: JSONEncoder().encode(data))
         #expect(decoded.switcher == data.switcher)
+    }
+    @Test func savedSettingsWithoutSizeKeepFiltersAndShortcuts() throws {
+        var data = AppData()
+        data.switcher.apps = .active; data.switcher.style = .icons; data.switcher.theme = .dark
+        data.switcher.summon = Shortcut(keyCode: 49, modifiers: 2048, label: "⌥Space")
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(data)) as? [String: Any])
+        var switcher = try #require(json["switcher"] as? [String: Any])
+        switcher.removeValue(forKey: "windowScale"); json["switcher"] = switcher
+        let decoded = try JSONDecoder().decode(AppData.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded.switcher == data.switcher)
+        #expect(decoded.switcher.windowScale == 1)
+    }
+    @Test(arguments: [-10.0, 10.0]) func savedSizeIsLimitedToSliderRange(value: Double) throws {
+        var settings = SwitcherSettings(); settings.windowScale = value
+        let decoded = try JSONDecoder().decode(SwitcherSettings.self, from: JSONEncoder().encode(settings))
+        #expect(SwitcherSettings.windowScaleRange.contains(decoded.windowScale))
     }
 }
 

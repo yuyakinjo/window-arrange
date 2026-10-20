@@ -63,6 +63,11 @@ public struct SwitcherSettings: Codable, Equatable {
     public var separateTabs = false
     public var style: SwitcherStyle = .thumbnails
     public var theme: SwitcherTheme = .system
+    public static let windowScaleRange = 0.7...1.5
+    public var windowScale = 1.0
+    public var effectiveWindowScale: Double {
+        windowScale.isFinite ? min(Self.windowScaleRange.upperBound, max(Self.windowScaleRange.lowerBound, windowScale)) : 1
+    }
     public var release: SwitcherRelease = .focus
     public var summon = Shortcut(keyCode: 48, modifiers: 256, label: "⌘⇥")
     public var next = Shortcut(keyCode: 48, modifiers: 0, label: "⇥")
@@ -70,6 +75,34 @@ public struct SwitcherSettings: Codable, Equatable {
     public var confirm = Shortcut(keyCode: 36, modifiers: 0, label: "↩")
     public var cancel = Shortcut(keyCode: 53, modifiers: 0, label: "Esc")
     public init() {}
+    private enum CodingKeys: String, CodingKey {
+        case enabled, apps, spaces, screens, minimized, hidden, fullscreen, windowless, order, onePerApp, separateTabs
+        case style, theme, windowScale, release, summon, next, previous, confirm, cancel
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        apps = try values.decode(SwitcherApps.self, forKey: .apps)
+        spaces = try values.decode(SwitcherSpaces.self, forKey: .spaces)
+        screens = try values.decode(SwitcherScreens.self, forKey: .screens)
+        minimized = try values.decode(SwitcherVisibility.self, forKey: .minimized)
+        hidden = try values.decode(SwitcherVisibility.self, forKey: .hidden)
+        fullscreen = try values.decode(Bool.self, forKey: .fullscreen)
+        windowless = try values.decode(SwitcherVisibility.self, forKey: .windowless)
+        order = try values.decode(SwitcherOrder.self, forKey: .order)
+        onePerApp = try values.decode(Bool.self, forKey: .onePerApp)
+        separateTabs = try values.decode(Bool.self, forKey: .separateTabs)
+        style = try values.decode(SwitcherStyle.self, forKey: .style)
+        theme = try values.decode(SwitcherTheme.self, forKey: .theme)
+        windowScale = try values.decodeIfPresent(Double.self, forKey: .windowScale) ?? 1
+        windowScale = effectiveWindowScale
+        release = try values.decode(SwitcherRelease.self, forKey: .release)
+        summon = try values.decode(Shortcut.self, forKey: .summon)
+        next = try values.decode(Shortcut.self, forKey: .next)
+        previous = try values.decode(Shortcut.self, forKey: .previous)
+        confirm = try values.decode(Shortcut.self, forKey: .confirm)
+        cancel = try values.decode(Shortcut.self, forKey: .cancel)
+    }
     public subscript(_ command: SwitcherCommand) -> Shortcut {
         get { switch command { case .summon: return summon; case .next: return next; case .previous: return previous; case .confirm: return confirm; case .cancel: return cancel } }
         set { switch command { case .summon: summon = newValue; case .next: next = newValue; case .previous: previous = newValue; case .confirm: confirm = newValue; case .cancel: cancel = newValue } }

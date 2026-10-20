@@ -54,6 +54,20 @@ struct SwitcherSettingsView: View {
             Section("表示") {
                 choice("表示形式", \.style)
                 choice("テーマ", \.theme)
+                LabeledContent("切替画面のサイズ") {
+                    HStack {
+                        Slider(value: binding(\.windowScale), in: SwitcherSettings.windowScaleRange, step: 0.05)
+                            .accessibilityLabel("切替画面のサイズ")
+                            .accessibilityValue("\(Int((model.data.switcher.effectiveWindowScale * 100).rounded()))%")
+                        Text("\(Int((model.data.switcher.effectiveWindowScale * 100).rounded()))%")
+                            .monospacedDigit().frame(width: 44, alignment: .trailing)
+                        Button("標準") { binding(\.windowScale).wrappedValue = 1 }
+                            .disabled(model.data.switcher.windowScale == 1)
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+                Text("切替画面とサムネイルの大きさを調整します。画面に収まるサイズが上限です。")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("画面収録", value: thumbnails.permitted ? "許可済み" : "未許可 · アイコンで表示")
                 Button(thumbnails.permitted ? "画面収録の設定を開く" : "サムネイルのための画面収録を許可") {
                     if thumbnails.permitted, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
@@ -134,7 +148,8 @@ private struct SwitcherSettingsPreview: View {
                         ForEach(controller.previewWindows, id: \.info.id) { window in
                             VStack(alignment: .leading, spacing: 4) {
                                 SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
-                                                   style: controller.settings.style, compact: true)
+                                                   style: controller.settings.style, compact: true,
+                                                   scale: controller.settings.effectiveWindowScale)
                                 Text(status(window.info)).font(.caption2).foregroundStyle(.secondary)
                                     .lineLimit(2).padding(.horizontal, 6)
                             }

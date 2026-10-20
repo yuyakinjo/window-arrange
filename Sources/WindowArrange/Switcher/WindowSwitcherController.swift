@@ -194,7 +194,8 @@ final class WindowSwitcherController: ObservableObject {
     }
     private func resizePanel(on screen: NSScreen) {
         guard let panel else { return }
-        let layout = SwitcherLayout(windowCount: windows.count, maximumWidth: min(screen.visibleFrame.width - 40, 1000))
+        let layout = SwitcherLayout(windowCount: windows.count, maximumWidth: screen.visibleFrame.width - 40,
+                                    requestedScale: settings.effectiveWindowScale)
         let width = layout.width
         let view: NSHostingView<SwitcherOverlay>
         if let existing = panel.contentView as? NSHostingView<SwitcherOverlay> {
@@ -204,7 +205,7 @@ final class WindowSwitcherController: ObservableObject {
             view = NSHostingView(rootView: SwitcherOverlay(controller: self, thumbnails: thumbnails, layout: layout))
             panel.contentView = view
         }
-        let height = min(screen.visibleFrame.height - 60, 620, view.fittingSize.height)
+        let height = min(screen.visibleFrame.height - 60, 620 * layout.scale, view.fittingSize.height)
         panel.setFrame(CGRect(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.midY - height / 2,
             width: width, height: height), display: true)
     }
@@ -331,23 +332,25 @@ final class WindowSwitcherController: ObservableObject {
             for theme in [SwitcherTheme.light, .dark] {
                 controller.settings.theme = theme
                 for count in [0, 1, 2, 3, 4, 5, 8, 9, 20] {
-                    let titles = ["作業メモ", "プロジェクト", "ターミナル"]
-                    controller.windows = (0..<count).map { index in
-                        TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
-                            title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
+                    for scale in [0.7, 1.0, 1.5] {
+                        let titles = ["作業メモ", "プロジェクト", "ターミナル"]
+                        controller.windows = (0..<count).map { index in
+                            TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
+                                title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
+                        }
+                        let layout = SwitcherLayout(windowCount: count, maximumWidth: 1600, requestedScale: scale)
+                        let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
+                        let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(620 * layout.scale, view.fittingSize.height))
+                        let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+                        window.contentView = view
+                        view.frame = bounds
+                        view.layoutSubtreeIfNeeded()
+                        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
+                        view.cacheDisplay(in: view.bounds, to: bitmap)
+                        guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
+                        let suffix = (count == 3 ? "" : "-\(count)") + (scale == 1 ? "" : "-\(Int((scale * 100).rounded()))pct")
+                        try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue)\(suffix).png"))
                     }
-                    let layout = SwitcherLayout(windowCount: count, maximumWidth: 960)
-                    let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
-                    let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(620, view.fittingSize.height))
-                    let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
-                    window.contentView = view
-                    view.frame = bounds
-                    view.layoutSubtreeIfNeeded()
-                    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
-                    view.cacheDisplay(in: view.bounds, to: bitmap)
-                    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
-                    let suffix = count == 3 ? "" : "-\(count)"
-                    try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue)\(suffix).png"))
                 }
             }
         }
@@ -380,9 +383,10 @@ private final class SwitcherPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private struct SwitcherLayout {
+struct SwitcherLayout {
     let windowCount: Int
     let maximumWidth: CGFloat
+    var requestedScale: CGFloat = 1
     let spacing: CGFloat = 12
     let outerPadding: CGFloat = 22
     let borderPadding: CGFloat = 1
@@ -390,10 +394,15 @@ private struct SwitcherLayout {
     private let maximumColumns = 4
 
     var columns: Int { min(maximumColumns, max(1, windowCount)) }
+    private var insets: CGFloat { 2 * (outerPadding + borderPadding + gridPadding) }
+    private var baseTileWidth: CGFloat { (1000 - insets - CGFloat(maximumColumns - 1) * spacing) / CGFloat(maximumColumns) }
+    var scale: CGFloat {
+        let requested = requestedScale.isFinite ? min(1.5, max(0.7, requestedScale)) : 1
+        let available = (maximumWidth - insets - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+        return max(0.1, min(requested, available / baseTileWidth))
+    }
     var width: CGFloat {
-        let insets = 2 * (outerPadding + borderPadding + gridPadding)
-        let tileWidth = (maximumWidth - insets - CGFloat(maximumColumns - 1) * spacing) / CGFloat(maximumColumns)
-        return insets + CGFloat(columns) * tileWidth + CGFloat(columns - 1) * spacing
+        insets + CGFloat(columns) * baseTileWidth * scale + CGFloat(columns - 1) * spacing
     }
 }
 
@@ -403,7 +412,7 @@ private struct SwitcherOverlay: View {
     let layout: SwitcherLayout
     private var columns: Int { layout.columns }
     private var spacing: CGFloat { layout.spacing }
-    private var tileHeight: CGFloat { controller.settings.style == .thumbnails ? 190 : 160 }
+    private var tileHeight: CGFloat { (controller.settings.style == .thumbnails ? 125 : 95) * layout.scale + 65 }
     private var gridHeight: CGFloat {
         let rows = max(1, (controller.windows.count + columns - 1) / columns)
         return CGFloat(rows) * tileHeight + CGFloat(rows - 1) * spacing + 8
@@ -445,7 +454,7 @@ private struct SwitcherOverlay: View {
         let selected = controller.selectedID == window.info.id
         return Button { controller.choose(window.info.id) } label: {
             SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
-                               style: controller.settings.style, selected: selected)
+                               style: controller.settings.style, selected: selected, scale: layout.scale)
         }.buttonStyle(.plain)
             .accessibilityLabel("\(window.info.appName)、\(window.info.title)")
             .accessibilityAddTraits(selected ? [.isSelected] : [])
@@ -458,6 +467,8 @@ struct SwitcherWindowTile: View {
     let style: SwitcherStyle
     var selected = false
     var compact = false
+    var scale: CGFloat = 1
+    private var imageHeight: CGFloat { (style == .thumbnails ? (compact ? 72 : 125) : (compact ? 52 : 95)) * scale }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -466,7 +477,7 @@ struct SwitcherWindowTile: View {
                 if style == .thumbnails, let image = image {
                     Image(nsImage: image).resizable().scaledToFit().padding(4)
                 } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(compact ? 12 : 24) }
-            }.frame(height: style == .thumbnails ? (compact ? 72 : 125) : (compact ? 52 : 95))
+            }.frame(height: imageHeight)
             HStack(spacing: 7) {
                 Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().frame(width: 20, height: 20)
                 VStack(alignment: .leading, spacing: 2) {
@@ -475,7 +486,7 @@ struct SwitcherWindowTile: View {
                 }
                 Spacer(minLength: 0)
             }
-        }.padding(10).frame(height: compact ? (style == .thumbnails ? 137 : 117) : (style == .thumbnails ? 190 : 160))
+        }.padding(10).frame(height: imageHeight + 65)
             .background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1))
             .contentShape(RoundedRectangle(cornerRadius: 12))
