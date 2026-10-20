@@ -9,6 +9,8 @@ final class SwitcherKeyboard {
     private var source: CFRunLoopSource?
     private var swallowed = Set<CGKeyCode>()
     private var heldModifiers: UInt32 = 0
+    private var recordingCommandTab: ((Shortcut) -> Void)?
+    private let nativeCommandTab = NativeCommandTab.shared
     private(set) var settings = SwitcherSettings()
     var active = false
     var suspended = false
@@ -26,12 +28,17 @@ final class SwitcherKeyboard {
             guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                                     MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr, id.signature == 0x57535749 else { return OSStatus(eventNotHandledErr) }
             let keyboard = Unmanaged<SwitcherKeyboard>.fromOpaque(context).takeUnretainedValue()
-            if !keyboard.suspended { keyboard.onSummon?(id.id == 2) }
+            if id.id == 3 || id.id == 4 {
+                let reverse = id.id == 4
+                keyboard.recordingCommandTab?(Shortcut(keyCode: 48, modifiers: reverse ? 256 | 512 : 256, label: reverse ? "⇧⌘⇥" : "⌘⇥"))
+            } else if !keyboard.suspended { keyboard.onSummon?(id.id == 2) }
             return noErr
         }, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &handler)
     }
     deinit { stop() }
     func stop() {
+        recordingCommandTab = nil
+        nativeCommandTab.restore()
         hotKeys.forEach { UnregisterEventHotKey($0) }; hotKeys.removeAll()
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
@@ -39,8 +46,20 @@ final class SwitcherKeyboard {
         if let handler { RemoveEventHandler(handler) }; handler = nil
     }
     func configure(_ settings: SwitcherSettings) throws {
+        try nativeCommandTab.replace([])
         hotKeys.forEach { UnregisterEventHotKey($0) }; hotKeys.removeAll()
         self.settings = settings
+        if recordingCommandTab != nil {
+            do {
+                try register(Shortcut(keyCode: 48, modifiers: 256, label: "⌘⇥"), id: 3)
+                try register(Shortcut(keyCode: 48, modifiers: 256 | 512, label: "⇧⌘⇥"), id: 4)
+                try nativeCommandTab.replace([1, 2])
+            } catch {
+                hotKeys.forEach { UnregisterEventHotKey($0) }; hotKeys.removeAll()
+                throw error
+            }
+            return
+        }
         guard settings.enabled, !suspended else {
             if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
             return
@@ -53,6 +72,11 @@ final class SwitcherKeyboard {
                 var reverse = settings.summon; reverse.modifiers |= UInt32(shiftKey)
                 try register(reverse, id: 2)
             }
+            let nativeIDs = NativeCommandTab.hotKeyIDs(for: settings.summon)
+            if !nativeIDs.isEmpty {
+                guard ensureEventTap() else { throw ArrangeError("⌘Tabで切替画面を開くには、アクセシビリティの許可が必要です。") }
+                try nativeCommandTab.replace(nativeIDs)
+            }
         } catch {
             hotKeys.forEach { UnregisterEventHotKey($0) }; hotKeys.removeAll()
             throw error
@@ -60,6 +84,8 @@ final class SwitcherKeyboard {
         _ = ensureEventTap()
     }
     func validateSummon(_ shortcut: Shortcut) throws {
+        // Recording already holds these exact chords; registering them twice would fail.
+        if recordingCommandTab != nil, !NativeCommandTab.hotKeyIDs(for: shortcut).isEmpty { return }
         var references: [EventHotKeyRef] = []
         defer { references.forEach { UnregisterEventHotKey($0) } }
         var chords = [shortcut]
@@ -74,6 +100,17 @@ final class SwitcherKeyboard {
             references.append(reference)
         }
     }
+    func beginShortcutRecording(_ receive: @escaping (Shortcut) -> Void) throws {
+        recordingCommandTab = receive
+        do { try configure(settings) }
+        catch { recordingCommandTab = nil; throw error }
+    }
+    func endShortcutRecording() {
+        guard recordingCommandTab != nil else { return }
+        recordingCommandTab = nil
+        nativeCommandTab.restore()
+        hotKeys.forEach { UnregisterEventHotKey($0) }; hotKeys.removeAll()
+    }
     private func register(_ shortcut: Shortcut, id: UInt32) throws {
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers,
@@ -83,8 +120,11 @@ final class SwitcherKeyboard {
     }
     @discardableResult
     func ensureEventTap() -> Bool {
+        guard AXIsProcessTrusted() else {
+            if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+            return false
+        }
         if let tap { CGEvent.tapEnable(tap: tap, enable: true); return true }
-        guard AXIsProcessTrusted() else { return false }
         let mask = [CGEventType.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown].reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, context in

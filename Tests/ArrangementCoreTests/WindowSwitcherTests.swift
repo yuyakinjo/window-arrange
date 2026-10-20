@@ -93,7 +93,7 @@ struct WindowSwitcherTests {
     @Test func shortcutConflictIncludesHeldModifiersAndAutomaticSummonNext() {
         let settings = SwitcherSettings()
         #expect(settings.conflict(for: settings.previous, command: .previous) == nil)
-        #expect(settings.conflict(for: Shortcut(keyCode: 48, modifiers: 2048, label: "same as next"), command: .confirm) != nil)
+        #expect(settings.conflict(for: Shortcut(keyCode: 48, modifiers: 256, label: "same as next"), command: .confirm) != nil)
         #expect(settings.conflict(for: settings.cancel, command: .previous) == .cancel)
         #expect(settings.conflict(for: Shortcut(keyCode: 48, modifiers: 256, label: "CmdTab"), command: .summon) == nil)
         #expect(settings.conflict(for: Shortcut(keyCode: 48, modifiers: 256 | 512, label: "CmdShiftTab"), command: .summon) != nil)
@@ -117,21 +117,42 @@ struct WindowSwitcherTests {
 
 struct SwitcherKeyboardRoutingTests {
     func key(_ code: UInt32, _ modifiers: UInt32 = 0) -> Shortcut { Shortcut(keyCode: code, modifiers: modifiers, label: "") }
+    @Test func defaultSummonIsCommandTab() {
+        let settings = SwitcherSettings()
+        #expect(settings.summon.keyCode == 48)
+        #expect(settings.summon.modifiers == 256)
+        #expect(settings.summon.label == "⌘⇥")
+    }
     @Test func heldAndReleasedModifierSessionsRouteTheSameLocalActions() {
         let settings = SwitcherSettings()
-        #expect(SwitcherKeyRouting.command(key: key(48, 2048), settings: settings, heldModifiers: 2048) == .next)
-        #expect(SwitcherKeyRouting.command(key: key(48, 2048 | 512), settings: settings, heldModifiers: 2048) == .previous)
-        #expect(SwitcherKeyRouting.command(key: key(36, 2048), settings: settings, heldModifiers: 2048) == .confirm)
+        #expect(SwitcherKeyRouting.command(key: key(48, 256), settings: settings, heldModifiers: 256) == .next)
+        #expect(SwitcherKeyRouting.command(key: key(48, 256 | 512), settings: settings, heldModifiers: 256) == .previous)
+        #expect(SwitcherKeyRouting.command(key: key(36, 256), settings: settings, heldModifiers: 256) == .confirm)
         #expect(SwitcherKeyRouting.command(key: key(53), settings: settings, heldModifiers: 0) == .cancel)
         #expect(SwitcherKeyRouting.command(key: key(48), settings: settings, heldModifiers: 0) == .next)
         #expect(SwitcherKeyRouting.command(key: key(48, 512), settings: settings, heldModifiers: 0) == .previous)
     }
     @Test func customKeysAndUnrelatedModifiersAreDistinguished() {
         var settings = SwitcherSettings(); settings.next = key(124); settings.previous = key(123)
-        #expect(SwitcherKeyRouting.command(key: key(124, 2048), settings: settings, heldModifiers: 2048) == .next)
-        #expect(SwitcherKeyRouting.command(key: key(123, 2048), settings: settings, heldModifiers: 2048) == .previous)
+        #expect(SwitcherKeyRouting.command(key: key(124, 256), settings: settings, heldModifiers: 256) == .next)
+        #expect(SwitcherKeyRouting.command(key: key(123, 256), settings: settings, heldModifiers: 256) == .previous)
         #expect(SwitcherKeyRouting.command(key: key(124, 256), settings: settings, heldModifiers: 0) == nil)
-        #expect(SwitcherKeyRouting.command(key: key(48, 2048), settings: settings, heldModifiers: 2048) == .next)
-        #expect(SwitcherKeyRouting.command(key: key(0), settings: settings, heldModifiers: 2048) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(48, 256), settings: settings, heldModifiers: 256) == .next)
+        #expect(SwitcherKeyRouting.command(key: key(0), settings: settings, heldModifiers: 256) == nil)
+    }
+    @Test(arguments: [UInt32(0), 256, 2048])
+    func arrowsNavigateWithDefaultKeysAndCustomSummon(heldModifiers: UInt32) {
+        var settings = SwitcherSettings()
+        if heldModifiers != 0 { settings.summon.modifiers = heldModifiers }
+        #expect(SwitcherKeyRouting.command(key: key(123, heldModifiers), settings: settings, heldModifiers: heldModifiers) == .previous)
+        #expect(SwitcherKeyRouting.command(key: key(124, heldModifiers), settings: settings, heldModifiers: heldModifiers) == .next)
+        #expect(SwitcherKeyRouting.command(key: key(123, heldModifiers | 4096), settings: settings, heldModifiers: heldModifiers) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(124, heldModifiers | 512), settings: settings, heldModifiers: heldModifiers) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(125, heldModifiers), settings: settings, heldModifiers: heldModifiers) == nil)
+    }
+    @Test func explicitArrowBindingsTakePriorityOverNavigation() {
+        var settings = SwitcherSettings(); settings.confirm = key(124); settings.cancel = key(123)
+        #expect(SwitcherKeyRouting.command(key: key(124, 256), settings: settings, heldModifiers: 256) == .confirm)
+        #expect(SwitcherKeyRouting.command(key: key(123), settings: settings, heldModifiers: 0) == .cancel)
     }
 }

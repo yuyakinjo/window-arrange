@@ -64,7 +64,7 @@ public struct SwitcherSettings: Codable, Equatable {
     public var style: SwitcherStyle = .thumbnails
     public var theme: SwitcherTheme = .system
     public var release: SwitcherRelease = .focus
-    public var summon = Shortcut(keyCode: 48, modifiers: 2048, label: "⌥⇥")
+    public var summon = Shortcut(keyCode: 48, modifiers: 256, label: "⌘⇥")
     public var next = Shortcut(keyCode: 48, modifiers: 0, label: "⇥")
     public var previous = Shortcut(keyCode: 48, modifiers: 512, label: "⇧⇥")
     public var confirm = Shortcut(keyCode: 36, modifiers: 0, label: "↩")
@@ -74,7 +74,7 @@ public struct SwitcherSettings: Codable, Equatable {
         get { switch command { case .summon: return summon; case .next: return next; case .previous: return previous; case .confirm: return confirm; case .cancel: return cancel } }
         set { switch command { case .summon: summon = newValue; case .next: next = newValue; case .previous: previous = newValue; case .confirm: confirm = newValue; case .cancel: cancel = newValue } }
     }
-    /// Local commands are matched with the held summon modifiers removed, so Option+Tab
+    /// Local commands are matched with the held summon modifiers removed, so Command+Tab
     /// continues a session whose local next key is Tab. Compare effective chords, not labels.
     public func conflict(for shortcut: Shortcut, command: SwitcherCommand) -> SwitcherCommand? {
         let hold = command == .summon ? shortcut.modifiers : summon.modifiers
@@ -212,9 +212,16 @@ public enum SwitcherKeyRouting {
         let triggerModifiers = settings.summon.modifiers & ~heldModifiers
         if key.keyCode == settings.summon.keyCode && modifiers == triggerModifiers { return .next }
         if key.keyCode == settings.summon.keyCode && triggerModifiers & 512 == 0 && modifiers == triggerModifiers | 512 { return .previous }
-        return [SwitcherCommand.cancel, .confirm, .previous, .next].first {
+        if let command = [SwitcherCommand.cancel, .confirm, .previous, .next].first(where: {
             let command = settings[$0]
             return command.keyCode == key.keyCode && command.modifiers & ~heldModifiers == modifiers
+        }) { return command }
+        // Arrow navigation supplements configured shortcuts while the switcher is open.
+        guard modifiers == 0 else { return nil }
+        switch key.keyCode {
+        case 123: return .previous
+        case 124: return .next
+        default: return nil
         }
     }
 }

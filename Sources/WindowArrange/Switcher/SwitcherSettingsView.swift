@@ -55,14 +55,14 @@ struct SwitcherSettingsView: View {
                             .font(.system(.body, design: .monospaced)).frame(minWidth: 100)
                     }
                 }
-                Text("呼び出しキーは⌥・⌘・⌃のいずれかを含む組み合わせです。Shift＋呼び出しキーで逆順に開始できます。次へ・前へ・決定・キャンセルは切替画面内だけで動作します。")
+                Text("呼び出しキーは⌥・⌘・⌃のいずれかを含む組み合わせです。Shift＋呼び出しキーで逆順に開始できます。切替画面内では←・→でも前後に移動できます。次へ・前へ・決定・キャンセルは切替画面内だけで動作します。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped).disabled(!model.storageAvailable)
         .onAppear { thumbnails.checkPermission() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in thumbnails.checkPermission() }
-        .sheet(item: $recording, onDismiss: { model.resumeAfterSwitcherRecording() }) { command in
+        .sheet(item: $recording, onDismiss: { controller.endShortcutRecording(); model.resumeAfterSwitcherRecording() }) { command in
             VStack(spacing: 18) {
                 Image(systemName: "keyboard").font(.largeTitle)
                 Text(command.title).font(.title2.bold())
@@ -70,7 +70,7 @@ struct SwitcherSettingsView: View {
                 Text(command == .summon ? "⌥・⌘・⌃のいずれかを含む組み合わせ" : "修飾キーなしでも設定できます。Escはキャンセル操作に割り当て可能です。")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if let error = recordingError { Text(error).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
-                SwitcherShortcutRecorder { shortcut in
+                SwitcherShortcutRecorder(controller: controller, onError: { recordingError = $0.localizedDescription }) { shortcut in
                     do { try model.setSwitcherShortcut(shortcut, command: command); recording = nil }
                     catch { recordingError = error.localizedDescription }
                 }.frame(width: 1, height: 1).accessibilityLabel("切替ショートカット入力")
@@ -92,15 +92,48 @@ struct SwitcherSettingsView: View {
 }
 
 private struct SwitcherShortcutRecorder: NSViewRepresentable {
+    var controller: WindowSwitcherController
+    var onError: (Error) -> Void
     var receive: (Shortcut) -> Void
     func makeNSView(context: Context) -> Capture {
-        let view = Capture(); view.receive = receive
+        let view = Capture(); view.receive = receive; view.controller = controller; view.onError = onError
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         return view
     }
     func updateNSView(_ nsView: Capture, context: Context) { nsView.receive = receive }
+    static func dismantleNSView(_ nsView: Capture, coordinator: ()) { nsView.stopRecording() }
     final class Capture: NSView {
         var receive: ((Shortcut) -> Void)?
+        weak var controller: WindowSwitcherController?
+        var onError: ((Error) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopRecording()
+            guard let window else { return }
+            let center = NotificationCenter.default
+            observers = [
+                center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.startRecording() }
+                },
+                center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.controller?.endShortcutRecording() }
+                }
+            ]
+            if window.isKeyWindow { startRecording() }
+        }
+        private func startRecording() {
+            do {
+                try controller?.beginShortcutRecording { [weak self] shortcut in
+                    guard let self, self.window?.isKeyWindow == true else { return }
+                    self.receive?(shortcut)
+                }
+            } catch { onError?(error) }
+        }
+        func stopRecording() {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }; observers.removeAll()
+            controller?.endShortcutRecording()
+        }
         override var acceptsFirstResponder: Bool { true }
         override func keyDown(with event: NSEvent) {
             guard !event.isARepeat else { return }

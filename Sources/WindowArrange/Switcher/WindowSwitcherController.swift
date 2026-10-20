@@ -58,12 +58,15 @@ final class WindowSwitcherController: ObservableObject {
         catch { shortcutError = error.localizedDescription }
     }
     func validateSummon(_ shortcut: Shortcut) throws { try keyboard.validateSummon(shortcut) }
+    func beginShortcutRecording(_ receive: @escaping (Shortcut) -> Void) throws { try keyboard.beginShortcutRecording(receive) }
+    func endShortcutRecording() { keyboard.endShortcutRecording() }
     func suspend(_ suspended: Bool) {
         dismiss(); cancelFocus(); keyboard.suspended = suspended
         do { try keyboard.configure(settings); shortcutError = nil }
         catch { shortcutError = error.localizedDescription }
     }
     func permissionsChanged() {
+        configure(settings)
         if AXIsProcessTrusted() && settings.enabled { _ = keyboard.ensureEventTap(); tracker.schedule() }
         else { dismiss(); cancelFocus() }
         thumbnails.checkPermission()
@@ -95,11 +98,9 @@ final class WindowSwitcherController: ObservableObject {
             panel.level = .popUpMenu; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
             panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false
             panel.backgroundColor = .clear; panel.hasShadow = true; panel.isReleasedWhenClosed = false
-            panel.contentView = NSHostingView(rootView: SwitcherOverlay(controller: self, thumbnails: thumbnails))
             self.panel = panel
         }
-        let width = min(screen.visibleFrame.width - 40, 1000), height = min(screen.visibleFrame.height - 60, 620)
-        panel?.setFrame(CGRect(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.midY - height / 2, width: width, height: height), display: true)
+        resizePanel(on: screen)
         panel?.appearance = settings.theme == .system ? nil : NSAppearance(named: settings.theme == .dark ? .darkAqua : .aqua)
         panel?.makeKeyAndOrderFront(nil)
         updateThumbnails()
@@ -135,7 +136,23 @@ final class WindowSwitcherController: ObservableObject {
             context.visibleSpaces = tracker.inventory.visibleSpaces
         }
         rebuild(); updateThumbnails()
+        if let screen = panel?.screen { resizePanel(on: screen) }
         if pendingCommit { commit() }
+    }
+    private func resizePanel(on screen: NSScreen) {
+        guard let panel else { return }
+        let width = min(screen.visibleFrame.width - 40, 1000)
+        let view: NSHostingView<SwitcherOverlay>
+        if let existing = panel.contentView as? NSHostingView<SwitcherOverlay> {
+            view = existing
+            view.rootView = SwitcherOverlay(controller: self, thumbnails: thumbnails, width: width)
+        } else {
+            view = NSHostingView(rootView: SwitcherOverlay(controller: self, thumbnails: thumbnails, width: width))
+            panel.contentView = view
+        }
+        let height = min(screen.visibleFrame.height - 60, 620, view.fittingSize.height)
+        panel.setFrame(CGRect(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.midY - height / 2,
+            width: width, height: height), display: true)
     }
     private func rebuild() {
         let inventory = tracker.inventory
@@ -254,23 +271,29 @@ final class WindowSwitcherController: ObservableObject {
     static func integrationPreview() throws {
         let controller = WindowSwitcherController()
         let app = NSRunningApplication.current
-        controller.windows = ["作業メモ", "プロジェクト", "ターミナル"].enumerated().map { index, title in
-            TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ", title: title), app: app, nativeID: nil, element: nil)
-        }
         controller.selectedID = "preview-1"
         for style in SwitcherStyle.allCases {
             controller.settings.style = style
             for theme in [SwitcherTheme.light, .dark] {
                 controller.settings.theme = theme
-                let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails))
-                let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 960, height: 540), styleMask: [.borderless], backing: .buffered, defer: false)
-                window.contentView = view
-                view.frame = CGRect(x: 0, y: 0, width: 960, height: 540)
-                view.layoutSubtreeIfNeeded()
-                guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
-                view.cacheDisplay(in: view.bounds, to: bitmap)
-                guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
-                try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue).png"))
+                for count in [0, 1, 3, 4, 5, 8, 9, 20] {
+                    let titles = ["作業メモ", "プロジェクト", "ターミナル"]
+                    controller.windows = (0..<count).map { index in
+                        TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
+                            title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
+                    }
+                    let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, width: 960))
+                    let bounds = CGRect(x: 0, y: 0, width: 960, height: min(620, view.fittingSize.height))
+                    let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+                    window.contentView = view
+                    view.frame = bounds
+                    view.layoutSubtreeIfNeeded()
+                    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
+                    let suffix = count == 3 ? "" : "-\(count)"
+                    try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue)\(suffix).png"))
+                }
             }
         }
         controller.stop()
@@ -305,6 +328,14 @@ private final class SwitcherPanel: NSPanel {
 private struct SwitcherOverlay: View {
     @ObservedObject var controller: WindowSwitcherController
     @ObservedObject var thumbnails: SwitcherThumbnails
+    var width: CGFloat
+    private let columns = 4
+    private let spacing: CGFloat = 12
+    private var tileHeight: CGFloat { controller.settings.style == .thumbnails ? 190 : 160 }
+    private var gridHeight: CGFloat {
+        let rows = max(1, (controller.windows.count + columns - 1) / columns)
+        return CGFloat(rows) * tileHeight + CGFloat(rows - 1) * spacing + 8
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -316,16 +347,17 @@ private struct SwitcherOverlay: View {
                 VStack(spacing: 12) {
                     if controller.loading { ProgressView(); Text("ウィンドウを取得中…") }
                     else { Image(systemName: "macwindow").font(.largeTitle); Text("表示条件に一致するウィンドウはありません") }
-                }.foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }.foregroundStyle(.secondary).frame(maxWidth: .infinity).frame(height: gridHeight)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: controller.settings.style == .thumbnails ? 205 : 145), spacing: 12)], spacing: 12) {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing), count: columns), spacing: spacing) {
                             ForEach(controller.windows, id: \.info.id) { window in
                                 tile(window).id(window.info.id)
                             }
                         }.padding(4)
                     }
+                    .frame(minHeight: 0, idealHeight: gridHeight, maxHeight: gridHeight)
                     .onChange(of: controller.selectedID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
                     .onAppear { if let id = controller.selectedID { proxy.scrollTo(id, anchor: .center) } }
                 }
@@ -337,7 +369,7 @@ private struct SwitcherOverlay: View {
             if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
             Divider()
             HStack {
-                Text("\(controller.settings.next.label) 次へ  ·  \(controller.settings.previous.label) 前へ")
+                Text("\(controller.settings.next.label) 次へ  ·  \(controller.settings.previous.label) 前へ  ·  ← → 移動")
                 Spacer()
                 Text("\(controller.settings.confirm.label) 決定  ·  \(controller.settings.cancel.label) キャンセル")
             }.font(.caption).foregroundStyle(.secondary)
@@ -345,6 +377,7 @@ private struct SwitcherOverlay: View {
         .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(.primary.opacity(0.12)))
         .padding(1)
+        .frame(width: width)
         .preferredColorScheme(controller.settings.theme == .system ? nil : controller.settings.theme == .dark ? .dark : .light)
     }
     private func tile(_ window: TrackedSwitcherWindow) -> some View {
@@ -365,7 +398,8 @@ private struct SwitcherOverlay: View {
                     }
                     Spacer(minLength: 0)
                 }
-            }.padding(10).background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
+            }.padding(10).frame(height: tileHeight)
+                .background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1))
                 .contentShape(RoundedRectangle(cornerRadius: 12))
         }.buttonStyle(.plain)

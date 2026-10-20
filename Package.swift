@@ -8,7 +8,8 @@ let package = Package(
     targets: [
         .target(name: "ArrangementCore"),
         .executableTarget(name: "WindowArrange", dependencies: ["ArrangementCore"]),
-        .testTarget(name: "ArrangementCoreTests", dependencies: ["ArrangementCore"])
+        .testTarget(name: "ArrangementCoreTests", dependencies: ["ArrangementCore"]),
+        .testTarget(name: "WindowArrangeTests", dependencies: ["WindowArrange"])
     ],
     swiftLanguageModes: [.v5]
 )
