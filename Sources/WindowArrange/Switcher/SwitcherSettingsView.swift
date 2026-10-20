@@ -1,12 +1,15 @@
 import SwiftUI
 import ArrangementCore
 
+// Resolve the property-wrapper type explicitly on SDKs that also export a State macro.
+private typealias ViewState<Value> = SwiftUI.State<Value>
+
 struct SwitcherSettingsView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var controller: WindowSwitcherController
     @ObservedObject var thumbnails: SwitcherThumbnails
-    @SwiftUI.State private var recording: SwitcherCommand?
-    @SwiftUI.State private var recordingError: String?
+    @ViewState private var recording: SwitcherCommand?
+    @ViewState private var recordingError: String?
     var body: some View {
         Form {
             Section("ウィンドウ切替") {
