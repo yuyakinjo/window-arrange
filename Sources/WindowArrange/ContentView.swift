@@ -348,7 +348,7 @@ private struct ShortcutsView: View {
                         if action != actions.last { Divider().padding(.leading, 56) }
                     }
                 }.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                Text("⌘ または ⌃ を含むキーを設定できます。半分・¼の配置は標準のウィンドウ操作APIで座標を調整します。最小化・フルスクリーンはmacOSの機能を呼び出します。")
+                Text("⌘ または ⌃ を含むキーを設定できます。None の半分配置と「画面全体に配置」はmacOS標準機能を優先します。標準機能が使えない場合やCycleの半分配置・¼の配置は座標を調整します。最小化・フルスクリーンはmacOSの機能を呼び出します。")
                     .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             }.padding(28)
         }.disabled(model.busy)
@@ -395,7 +395,7 @@ private struct RepeatModePicker: View {
             }
             .pickerStyle(.radioGroup)
             .disabled(!model.storageAvailable)
-            Text("Cycle は同じ画面で 1/2 → 2/3 → 1/3 を繰り返します。Cycle Displays は半画面ずつ移動します。右半分なら「この画面の右 → 次の画面の左 → 右 → …」と巡回します。開いているMacBookの内蔵画面も対象です。None は半分に配置します。")
+            Text("Cycle は同じ画面で 1/2 → 2/3 → 1/3 を繰り返します。Cycle Displays は半画面ずつ移動します。右半分なら「この画面の右 → 次の画面の左 → 右 → …」と巡回します。開いているMacBookの内蔵画面も対象です。None はmacOS標準の半分配置を優先し、標準機能が使えないアプリでは座標を指定して配置します。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }

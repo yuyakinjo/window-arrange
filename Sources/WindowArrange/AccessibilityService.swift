@@ -211,6 +211,7 @@ final class AccessibilityService {
         if action == .minimize { try AX.setBool(window, kAXMinimizedAttribute, true); return }
         if action == .fullscreen { try AX.setBool(window, "AXFullScreen", !AX.bool(window, "AXFullScreen")); return }
         guard !AX.bool(window, "AXFullScreen") else { throw ArrangeError("フルスクリーンを解除してから配置してください。") }
+        if try NativeWindowTiling.perform(action, repeatMode: repeatMode, window: window) { return }
         guard let frame = AX.frame(window) else { throw ArrangeError("ウィンドウの座標を取得できませんでした。") }
         let displays = displays()
         guard let display = Layout.display(for: frame, in: displays) else { return }

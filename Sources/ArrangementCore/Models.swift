@@ -11,7 +11,7 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable {
         case .top: return "上半分"; case .bottom: return "下半分"
         case .topLeft: return "左上 ¼"; case .topRight: return "右上 ¼"
         case .bottomLeft: return "左下 ¼"; case .bottomRight: return "右下 ¼"
-        case .fill: return "画面いっぱいに配置"; case .center: return "中央に配置"
+        case .fill: return "画面全体に配置"; case .center: return "中央に配置"
         case .nextDisplay: return "次のディスプレイへ"; case .minimize: return "最小化"
         case .fullscreen: return "フルスクリーン切替"; case .snapshot: return "Snapshotを保存"
         case .restore: return "選択中のSnapshotを復元"

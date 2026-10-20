@@ -101,14 +101,15 @@ struct Launcher {
             return
         }
         if let index = CommandLine.arguments.firstIndex(of: "--test-window"), CommandLine.arguments.indices.contains(index + 1) {
-            IntegrationCheck.fixture(title: CommandLine.arguments[index + 1])
+            IntegrationCheck.fixture(title: CommandLine.arguments[index + 1], nativeMenu: !CommandLine.arguments.contains("--without-window-menu"))
             return
         }
-        if CommandLine.arguments.contains("--integration-check") {
+        if CommandLine.arguments.contains("--integration-check") || CommandLine.arguments.contains("--native-tiling-check") {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
             Task { @MainActor in
-                let status = await IntegrationCheck.run()
+                let status = CommandLine.arguments.contains("--native-tiling-check")
+                    ? await NativeTilingIntegrationCheck.run() : await IntegrationCheck.run()
                 fflush(stdout)
                 exit(status)
             }

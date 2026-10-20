@@ -6,16 +6,50 @@ import ArrangementCore
 /// Development-only smoke check. Only its own disposable child window is modified.
 @MainActor
 enum IntegrationCheck {
-    static func fixture(title: String) {
+    @MainActor private final class FixtureDelegate: NSObject, NSApplicationDelegate {
+        let window: NSWindow
+        init(window: NSWindow) { self.window = window }
+        func applicationDidBecomeActive(_ notification: Notification) {
+            window.makeKeyAndOrderFront(nil)
+            Self.updateMenus()
+        }
+        static func updateMenus() {
+            // Refresh validation without opening menus, including the enabled
+            // state of Return to Previous Size after a native tile operation.
+            NSApp.windowsMenu?.update()
+            for item in NSApp.windowsMenu?.items ?? [] { item.submenu?.update() }
+        }
+    }
+    static func fixture(title: String, nativeMenu: Bool = true) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
+        let menuBar = NSMenu()
+        let appItem = NSMenuItem(title: "Window Arrange Test", action: nil, keyEquivalent: "")
+        appItem.submenu = NSMenu(title: "Window Arrange Test")
+        menuBar.addItem(appItem)
+        if nativeMenu {
+            let item = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: "Window")
+            menu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+            menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+            item.submenu = menu
+            menuBar.addItem(item)
+            app.windowsMenu = menu
+        }
+        app.mainMenu = menuBar
         let window = NSWindow(contentRect: CGRect(x: 180, y: 220, width: 640, height: 440),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = title
         window.contentView = NSTextField(labelWithString: "Window Arrange · disposable integration fixture")
+        let delegate = FixtureDelegate(window: window)
+        app.delegate = delegate
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            Task { @MainActor in FixtureDelegate.updateMenus() }
+        }
         window.makeKeyAndOrderFront(nil)
         app.run()
-        withExtendedLifetime(window) {}
+        timer.invalidate()
+        withExtendedLifetime(delegate) {}
     }
     static func run() async -> Int32 {
         let child = Process()
