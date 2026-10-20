@@ -357,11 +357,6 @@ private struct SwitcherOverlay: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Label("ウィンドウ切替", systemImage: "rectangle.on.rectangle").font(.headline)
-                Spacer()
-                Text("\(controller.windows.count) ウィンドウ").font(.caption).foregroundStyle(.secondary)
-            }
             if controller.windows.isEmpty {
                 VStack(spacing: 12) {
                     if controller.loading { ProgressView(); Text("ウィンドウを取得中…") }
@@ -386,30 +381,12 @@ private struct SwitcherOverlay: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
-            Divider()
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    navigationHint
-                    Spacer()
-                    confirmationHint
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    navigationHint
-                    confirmationHint
-                }
-            }.font(.caption).foregroundStyle(.secondary)
         }
         .padding(layout.outerPadding).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(.primary.opacity(0.12)))
         .padding(layout.borderPadding)
         .frame(width: layout.width)
         .preferredColorScheme(controller.settings.theme == .system ? nil : controller.settings.theme == .dark ? .dark : .light)
-    }
-    private var navigationHint: some View {
-        Text("\(controller.settings.next.label) 次へ  ·  \(controller.settings.previous.label) 前へ  ·  ← → 移動")
-    }
-    private var confirmationHint: some View {
-        Text("\(controller.settings.confirm.label) 決定  ·  \(controller.settings.cancel.label) キャンセル")
     }
     private func tile(_ window: TrackedSwitcherWindow) -> some View {
         let selected = controller.selectedID == window.info.id
