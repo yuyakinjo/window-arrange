@@ -194,9 +194,11 @@ final class AccessibilityService {
     }
     func focusedWindow() throws -> AXUIElement {
         try requireAccess()
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
             throw ArrangeError("操作したいアプリを前面にしてショートカットを押してください。")
+        }
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            throw ArrangeError("Window Arrange自身のウィンドウは操作対象外です。操作したい別のアプリを前面にしてショートカットを押してください。")
         }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.25)

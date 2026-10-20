@@ -303,7 +303,12 @@ private struct AppIcon: View {
 
 private struct ShortcutsView: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage("showOnlyCustomizedShortcuts") private var showOnlyCustomizedShortcuts = false
+    private var visibleActions: [WindowAction] {
+        WindowAction.allCases.filter { !showOnlyCustomizedShortcuts || model.data.shortcuts[$0.rawValue] != nil }
+    }
     var body: some View {
+        let actions = visibleActions
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Label("前面のアプリのウィンドウを操作します", systemImage: "cursorarrow.rays").font(.callout).foregroundStyle(.secondary)
@@ -311,8 +316,18 @@ private struct ShortcutsView: View {
                 if !model.shortcutFailures.isEmpty {
                     Label("登録できなかった操作：" + model.shortcutFailures.joined(separator: "、"), systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
                 }
+                Toggle("変更したショートカットのみ表示", isOn: $showOnlyCustomizedShortcuts)
+                    .toggleStyle(.checkbox)
+                    .help("キーを割り当てた項目だけ表示します。初期状態ではすべて未設定です。")
                 VStack(spacing: 0) {
-                    ForEach(WindowAction.allCases) { action in
+                    if actions.isEmpty {
+                        VStack(spacing: 10) {
+                            Text("変更したショートカットはありません。")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Button("すべて表示") { showOnlyCustomizedShortcuts = false }
+                        }.frame(maxWidth: .infinity).padding(24)
+                    }
+                    ForEach(actions) { action in
                         HStack(spacing: 13) {
                             Image(systemName: action.symbol).foregroundStyle(accent).frame(width: 25)
                             Text(action.title).font(.callout)
@@ -325,7 +340,7 @@ private struct ShortcutsView: View {
                                 .buttonStyle(.plain).disabled(model.data.shortcuts[action.rawValue] == nil).help("割り当てを解除")
                                 .accessibilityLabel("\(action.title)の割り当てを解除")
                         }.padding(.horizontal, 18).padding(.vertical, 11)
-                        if action != WindowAction.allCases.last { Divider().padding(.leading, 56) }
+                        if action != actions.last { Divider().padding(.leading, 56) }
                     }
                 }.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                 Text("⌘ または ⌃ を含むキーを設定できます。半分・¼の配置は標準のウィンドウ操作APIで座標を調整します。最小化・フルスクリーンはmacOSの機能を呼び出します。")
