@@ -141,13 +141,14 @@ final class WindowSwitcherController: ObservableObject {
     }
     private func resizePanel(on screen: NSScreen) {
         guard let panel else { return }
-        let width = min(screen.visibleFrame.width - 40, 1000)
+        let layout = SwitcherLayout(windowCount: windows.count, maximumWidth: min(screen.visibleFrame.width - 40, 1000))
+        let width = layout.width
         let view: NSHostingView<SwitcherOverlay>
         if let existing = panel.contentView as? NSHostingView<SwitcherOverlay> {
             view = existing
-            view.rootView = SwitcherOverlay(controller: self, thumbnails: thumbnails, width: width)
+            view.rootView = SwitcherOverlay(controller: self, thumbnails: thumbnails, layout: layout)
         } else {
-            view = NSHostingView(rootView: SwitcherOverlay(controller: self, thumbnails: thumbnails, width: width))
+            view = NSHostingView(rootView: SwitcherOverlay(controller: self, thumbnails: thumbnails, layout: layout))
             panel.contentView = view
         }
         let height = min(screen.visibleFrame.height - 60, 620, view.fittingSize.height)
@@ -276,14 +277,15 @@ final class WindowSwitcherController: ObservableObject {
             controller.settings.style = style
             for theme in [SwitcherTheme.light, .dark] {
                 controller.settings.theme = theme
-                for count in [0, 1, 3, 4, 5, 8, 9, 20] {
+                for count in [0, 1, 2, 3, 4, 5, 8, 9, 20] {
                     let titles = ["作業メモ", "プロジェクト", "ターミナル"]
                     controller.windows = (0..<count).map { index in
                         TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
                             title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
                     }
-                    let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, width: 960))
-                    let bounds = CGRect(x: 0, y: 0, width: 960, height: min(620, view.fittingSize.height))
+                    let layout = SwitcherLayout(windowCount: count, maximumWidth: 960)
+                    let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
+                    let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(620, view.fittingSize.height))
                     let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
                     window.contentView = view
                     view.frame = bounds
@@ -325,12 +327,29 @@ private final class SwitcherPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+private struct SwitcherLayout {
+    let windowCount: Int
+    let maximumWidth: CGFloat
+    let spacing: CGFloat = 12
+    let outerPadding: CGFloat = 22
+    let borderPadding: CGFloat = 1
+    let gridPadding: CGFloat = 4
+    private let maximumColumns = 4
+
+    var columns: Int { min(maximumColumns, max(1, windowCount)) }
+    var width: CGFloat {
+        let insets = 2 * (outerPadding + borderPadding + gridPadding)
+        let tileWidth = (maximumWidth - insets - CGFloat(maximumColumns - 1) * spacing) / CGFloat(maximumColumns)
+        return insets + CGFloat(columns) * tileWidth + CGFloat(columns - 1) * spacing
+    }
+}
+
 private struct SwitcherOverlay: View {
     @ObservedObject var controller: WindowSwitcherController
     @ObservedObject var thumbnails: SwitcherThumbnails
-    var width: CGFloat
-    private let columns = 4
-    private let spacing: CGFloat = 12
+    let layout: SwitcherLayout
+    private var columns: Int { layout.columns }
+    private var spacing: CGFloat { layout.spacing }
     private var tileHeight: CGFloat { controller.settings.style == .thumbnails ? 190 : 160 }
     private var gridHeight: CGFloat {
         let rows = max(1, (controller.windows.count + columns - 1) / columns)
@@ -355,7 +374,7 @@ private struct SwitcherOverlay: View {
                             ForEach(controller.windows, id: \.info.id) { window in
                                 tile(window).id(window.info.id)
                             }
-                        }.padding(4)
+                        }.padding(layout.gridPadding)
                     }
                     .frame(minHeight: 0, idealHeight: gridHeight, maxHeight: gridHeight)
                     .onChange(of: controller.selectedID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
@@ -368,17 +387,29 @@ private struct SwitcherOverlay: View {
             }
             if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
             Divider()
-            HStack {
-                Text("\(controller.settings.next.label) 次へ  ·  \(controller.settings.previous.label) 前へ  ·  ← → 移動")
-                Spacer()
-                Text("\(controller.settings.confirm.label) 決定  ·  \(controller.settings.cancel.label) キャンセル")
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    navigationHint
+                    Spacer()
+                    confirmationHint
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    navigationHint
+                    confirmationHint
+                }
             }.font(.caption).foregroundStyle(.secondary)
         }
-        .padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .padding(layout.outerPadding).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(.primary.opacity(0.12)))
-        .padding(1)
-        .frame(width: width)
+        .padding(layout.borderPadding)
+        .frame(width: layout.width)
         .preferredColorScheme(controller.settings.theme == .system ? nil : controller.settings.theme == .dark ? .dark : .light)
+    }
+    private var navigationHint: some View {
+        Text("\(controller.settings.next.label) 次へ  ·  \(controller.settings.previous.label) 前へ  ·  ← → 移動")
+    }
+    private var confirmationHint: some View {
+        Text("\(controller.settings.confirm.label) 決定  ·  \(controller.settings.cancel.label) キャンセル")
     }
     private func tile(_ window: TrackedSwitcherWindow) -> some View {
         let selected = controller.selectedID == window.info.id
