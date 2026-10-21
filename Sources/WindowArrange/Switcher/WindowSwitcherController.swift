@@ -338,27 +338,30 @@ final class WindowSwitcherController: ObservableObject {
         controller.selectedID = "preview-1"
         for style in SwitcherStyle.allCases {
             controller.settings.style = style
-            for theme in [SwitcherTheme.light, .dark] {
-                controller.settings.theme = theme
-                for count in [0, 1, 2, 3, 4, 5, 8, 9, 20] {
-                    for scale in [0.7, 1.0, 1.5] {
-                        let titles = ["作業メモ", "プロジェクト", "ターミナル"]
-                        controller.windows = (0..<count).map { index in
-                            TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
-                                title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
+            for position in SwitcherTitlePosition.allCases {
+                controller.settings.titlePosition = position
+                for theme in [SwitcherTheme.light, .dark] {
+                    controller.settings.theme = theme
+                    for count in [0, 1, 2, 3, 4, 5, 8, 9, 20] {
+                        for scale in [0.7, 1.0, 1.5] {
+                            let titles = ["作業メモ", "プロジェクト", "ターミナル"]
+                            controller.windows = (0..<count).map { index in
+                                TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
+                                    title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
+                            }
+                            let layout = SwitcherLayout(windowCount: count, maximumWidth: 1600, requestedScale: scale)
+                            let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
+                            let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(620 * layout.scale, view.fittingSize.height))
+                            let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+                            window.contentView = view
+                            view.frame = bounds
+                            view.layoutSubtreeIfNeeded()
+                            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
+                            view.cacheDisplay(in: view.bounds, to: bitmap)
+                            guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
+                            let suffix = (position == .bottom ? "" : "-top") + (count == 3 ? "" : "-\(count)") + (scale == 1 ? "" : "-\(Int((scale * 100).rounded()))pct")
+                            try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue)\(suffix).png"))
                         }
-                        let layout = SwitcherLayout(windowCount: count, maximumWidth: 1600, requestedScale: scale)
-                        let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
-                        let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(620 * layout.scale, view.fittingSize.height))
-                        let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
-                        window.contentView = view
-                        view.frame = bounds
-                        view.layoutSubtreeIfNeeded()
-                        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
-                        view.cacheDisplay(in: view.bounds, to: bitmap)
-                        guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
-                        let suffix = (count == 3 ? "" : "-\(count)") + (scale == 1 ? "" : "-\(Int((scale * 100).rounded()))pct")
-                        try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue)\(suffix).png"))
                     }
                 }
             }
@@ -464,7 +467,8 @@ private struct SwitcherOverlay: View {
         let selected = controller.selectedID == window.info.id
         return Button { controller.choose(window.info.id) } label: {
             SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
-                               style: controller.settings.style, selected: selected, scale: layout.scale)
+                               style: controller.settings.style, titlePosition: controller.settings.titlePosition,
+                               selected: selected, scale: layout.scale)
         }.buttonStyle(.plain)
             .accessibilityLabel("\(window.info.appName)、\(window.info.title)")
             .accessibilityAddTraits(selected ? [.isSelected] : [])
@@ -475,6 +479,7 @@ struct SwitcherWindowTile: View {
     let window: TrackedSwitcherWindow
     let image: NSImage?
     let style: SwitcherStyle
+    let titlePosition: SwitcherTitlePosition
     var selected = false
     var compact = false
     var scale: CGFloat = 1
@@ -482,24 +487,33 @@ struct SwitcherWindowTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(.primary.opacity(0.04))
-                if style == .thumbnails, let image = image {
-                    Image(nsImage: image).resizable().scaledToFit().padding(4)
-                } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(compact ? 12 : 24) }
-            }.frame(height: imageHeight)
-            HStack(spacing: 7) {
-                Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().frame(width: 20, height: 20)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(window.info.title.isEmpty ? window.info.appName : window.info.title).font(.callout.weight(.medium)).lineLimit(1)
-                    Text(window.info.appName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
+            if titlePosition == .top { titleLabel }
+            thumbnail
+            if titlePosition == .bottom { titleLabel }
         }.padding(10).frame(height: imageHeight + 65)
             .background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1))
             .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var thumbnail: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(.primary.opacity(0.04))
+            if style == .thumbnails, let image = image {
+                Image(nsImage: image).resizable().scaledToFit().padding(4)
+            } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(compact ? 12 : 24) }
+        }.frame(height: imageHeight)
+    }
+
+    private var titleLabel: some View {
+        HStack(spacing: 7) {
+            Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().frame(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(window.info.title.isEmpty ? window.info.appName : window.info.title).font(.callout.weight(.medium)).lineLimit(1)
+                Text(window.info.appName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 

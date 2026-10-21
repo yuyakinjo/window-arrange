@@ -150,6 +150,7 @@ struct WindowSwitcherTests {
     @Test func switcherSettingsRoundTripAllFiltersAndCustomKeys() throws {
         var data = AppData(); data.switcher.apps = .underCursor; data.switcher.spaces = .other
         data.switcher.theme = .dark; data.switcher.style = .icons; data.switcher.release = .hold
+        data.switcher.titlePosition = .top
         data.switcher.separateTabs = true; data.switcher.onePerApp = true
         data.switcher.windowScale = 1.35
         data.switcher.excludedApps = [SwitcherExcludedApp(id: "com.example.editor", name: "Editor")]
@@ -176,6 +177,17 @@ struct WindowSwitcherTests {
         let decoded = try JSONDecoder().decode(SwitcherSettings.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(decoded == settings)
         #expect(decoded.excludedApps.isEmpty)
+    }
+    @Test func savedSettingsWithoutTitlePositionKeepExistingPreferences() throws {
+        var settings = SwitcherSettings(); settings.apps = .active; settings.theme = .dark
+        settings.windowScale = 1.35
+        settings.excludedApps = [SwitcherExcludedApp(id: "com.example.editor", name: "Editor")]
+        settings.summon = Shortcut(keyCode: 49, modifiers: 2048, label: "⌥Space")
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        json.removeValue(forKey: "titlePosition")
+        let decoded = try JSONDecoder().decode(SwitcherSettings.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == settings)
+        #expect(decoded.titlePosition == .bottom)
     }
     @Test(arguments: [-10.0, 10.0]) func savedSizeIsLimitedToSliderRange(value: Double) throws {
         var settings = SwitcherSettings(); settings.windowScale = value

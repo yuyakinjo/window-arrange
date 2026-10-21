@@ -79,6 +79,7 @@ struct SwitcherSettingsView: View {
             }
             Section("表示") {
                 choice("表示形式", \.style)
+                choice("アイコン＋タイトルの位置", \.titlePosition)
                 choice("テーマ", \.theme)
                 LabeledContent("切替画面のサイズ") {
                     HStack {
@@ -182,7 +183,7 @@ private struct SwitcherSettingsPreview: View {
                         ForEach(controller.previewWindows, id: \.info.id) { window in
                             VStack(alignment: .leading, spacing: 4) {
                                 SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
-                                                   style: controller.settings.style, compact: true,
+                                                   style: controller.settings.style, titlePosition: controller.settings.titlePosition, compact: true,
                                                    scale: controller.settings.effectiveWindowScale)
                                     .overlay(alignment: .topTrailing) {
                                         Button { onExclude(window.info) } label: {
