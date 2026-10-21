@@ -11,6 +11,13 @@ public enum SwitcherApps: String, SwitcherChoice {
     case .all: return "すべてのアプリ"; case .active: return "現在のアプリ"; case .other: return "現在以外のアプリ"
     case .underCursor: return "カーソル下のウィンドウ"; case .appUnderCursor: return "カーソル下のアプリ"
     } }
+    public var helpText: String { switch self {
+    case .all: return "起動中の各アプリのウィンドウを表示します。"
+    case .active: return "切替画面を開く直前に使っていたアプリのウィンドウだけを表示します。"
+    case .other: return "切替画面を開く直前に使っていたアプリを除く、ほかのアプリのウィンドウを表示します。"
+    case .underCursor: return "マウス位置を含むウィンドウを表示します。重なっている背後のウィンドウも対象です。"
+    case .appUnderCursor: return "マウス位置にある最前面のウィンドウのアプリについて、そのアプリの各ウィンドウを表示します。"
+    } }
 }
 public enum SwitcherSpaces: String, SwitcherChoice {
     case all, visible, other
@@ -49,9 +56,29 @@ public enum SwitcherCommand: String, CaseIterable, Identifiable {
     } }
 }
 
+public enum SwitcherAction {
+    case next, previous, up, down, confirm, cancel
+
+    init(_ command: SwitcherCommand) {
+        switch command {
+        case .summon, .next: self = .next
+        case .previous: self = .previous
+        case .confirm: self = .confirm
+        case .cancel: self = .cancel
+        }
+    }
+}
+
+public struct SwitcherExcludedApp: Codable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public init(id: String, name: String) { self.id = id; self.name = name }
+}
+
 public struct SwitcherSettings: Codable, Equatable {
     public var enabled = true
     public var apps: SwitcherApps = .all
+    public var excludedApps: [SwitcherExcludedApp] = []
     public var spaces: SwitcherSpaces = .all
     public var screens: SwitcherScreens = .all
     public var minimized: SwitcherVisibility = .show
@@ -77,12 +104,13 @@ public struct SwitcherSettings: Codable, Equatable {
     public init() {}
     private enum CodingKeys: String, CodingKey {
         case enabled, apps, spaces, screens, minimized, hidden, fullscreen, windowless, order, onePerApp, separateTabs
-        case style, theme, windowScale, release, summon, next, previous, confirm, cancel
+        case style, theme, windowScale, release, summon, next, previous, confirm, cancel, excludedApps
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try values.decode(Bool.self, forKey: .enabled)
         apps = try values.decode(SwitcherApps.self, forKey: .apps)
+        excludedApps = try values.decodeIfPresent([SwitcherExcludedApp].self, forKey: .excludedApps) ?? []
         spaces = try values.decode(SwitcherSpaces.self, forKey: .spaces)
         screens = try values.decode(SwitcherScreens.self, forKey: .screens)
         minimized = try values.decode(SwitcherVisibility.self, forKey: .minimized)
@@ -168,10 +196,12 @@ public struct SwitcherContext {
 }
 public enum SwitcherList {
     public static func windows(_ windows: [SwitcherWindow], settings: SwitcherSettings, context: SwitcherContext) -> [SwitcherWindow] {
+        let excludedAppIDs = Set(settings.excludedApps.map(\.id))
         func trailing(_ w: SwitcherWindow) -> Bool {
             (w.minimized && settings.minimized == .last) || (w.hidden && settings.hidden == .last) || (w.windowless && settings.windowless == .last)
         }
         let filtered = windows.filter { w in
+            if excludedAppIDs.contains(w.appID) { return false }
             switch settings.apps {
             case .all: break
             case .active: if w.appID != context.activeApp { return false }
@@ -230,6 +260,15 @@ public struct SwitcherSelection {
         let index = selected.flatMap { ids.firstIndex(of: $0) } ?? 0
         selected = ids[((index + delta) % ids.count + ids.count) % ids.count]
     }
+    /// Move to the same column in the next/previous row, wrapping at the grid edges.
+    /// A short final row uses its last available tile when that column is missing.
+    public mutating func moveVertically(_ delta: Int, columns: Int) {
+        guard !ids.isEmpty, columns > 0 else { return }
+        let index = selected.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let rows = (ids.count + columns - 1) / columns
+        let row = ((index / columns + delta) % rows + rows) % rows
+        selected = ids[min(row * columns + index % columns, ids.count - 1)]
+    }
     public mutating func select(_ id: String) { if ids.contains(id) { selected = id } }
     public mutating func reconcile(ids: [String]) {
         let oldIndex = selected.flatMap { self.ids.firstIndex(of: $0) } ?? 0
@@ -240,7 +279,7 @@ public struct SwitcherSelection {
 }
 
 public enum SwitcherKeyRouting {
-    public static func command(key: Shortcut, settings: SwitcherSettings, heldModifiers: UInt32) -> SwitcherCommand? {
+    public static func command(key: Shortcut, settings: SwitcherSettings, heldModifiers: UInt32) -> SwitcherAction? {
         let modifiers = key.modifiers & ~heldModifiers
         let triggerModifiers = settings.summon.modifiers & ~heldModifiers
         if key.keyCode == settings.summon.keyCode && modifiers == triggerModifiers { return .next }
@@ -248,12 +287,14 @@ public enum SwitcherKeyRouting {
         if let command = [SwitcherCommand.cancel, .confirm, .previous, .next].first(where: {
             let command = settings[$0]
             return command.keyCode == key.keyCode && command.modifiers & ~heldModifiers == modifiers
-        }) { return command }
+        }) { return SwitcherAction(command) }
         // Arrow navigation supplements configured shortcuts while the switcher is open.
         guard modifiers == 0 else { return nil }
         switch key.keyCode {
         case 123: return .previous
         case 124: return .next
+        case 125: return .down
+        case 126: return .up
         default: return nil
         }
     }

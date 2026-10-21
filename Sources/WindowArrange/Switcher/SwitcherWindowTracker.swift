@@ -2,6 +2,13 @@ import AppKit
 import ApplicationServices
 import ArrangementCore
 
+extension NSRunningApplication {
+    var switcherAppID: String {
+        bundleIdentifier ?? bundleURL?.standardizedFileURL.path ?? executableURL?.standardizedFileURL.path
+            ?? "pid.\(processIdentifier):\(launchDate?.timeIntervalSince1970 ?? 0)"
+    }
+}
+
 struct TrackedSwitcherWindow {
     var info: SwitcherWindow
     let app: NSRunningApplication
@@ -28,7 +35,7 @@ final class SwitcherScanner: @unchecked Sendable {
         "com.apple.notificationcenterui"
     ]
     let spaces = NativeSpaces()
-    private var elements: [String: AXUIElement] = [:]
+    private var elements: [String: [UInt32: AXUIElement]] = [:]
     private var subscriptions: SwitcherAXSubscriptions?
 
     func scan(displays: [DisplayRecord], mouse: CGPoint, frontPID: pid_t?, notify: (@Sendable () -> Void)? = nil) -> SwitcherInventory {
@@ -40,42 +47,39 @@ final class SwitcherScanner: @unchecked Sendable {
         let visible = Set(((try? spaces.activeSpaces(includeFullscreen: true)) ?? []).map(\.runtimeID))
         let raw = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let onScreenIDs = Set((CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
-        var result: [TrackedSwitcherWindow] = [], alive = Set<String>(), activeWindow: String?
+        var result: [TrackedSwitcherWindow] = [], aliveSessions = Set<String>(), activeWindow: String?
         var frontCursorApp: String?, cursorWindows = Set<String>()
         for app in apps {
             let pid = app.processIdentifier
-            let appID = app.bundleIdentifier ?? "pid.\(pid)"
+            let appID = app.switcherAppID
             let session = "\(pid):\(app.launchDate?.timeIntervalSince1970 ?? 0)"
+            aliveSessions.insert(session)
             func key(_ id: UInt32) -> String { "\(session):\(id)" }
             let axApp = AXUIElementCreateApplication(pid)
             AXUIElementSetMessagingTimeout(axApp, 0.15)
             let axWindows = AX.value(axApp, kAXWindowsAttribute) as? [AXUIElement] ?? []
             let focused = AX.element(axApp, kAXFocusedWindowAttribute)
             let focusedID = focused.flatMap { spaces.windowID($0) }
-            var native = Set<UInt32>()
+            var current: [UInt32: AXUIElement] = [:]
             for ax in axWindows {
                 AXUIElementSetMessagingTimeout(ax, 0.15)
-                guard AX.string(ax, kAXRoleAttribute) == kAXWindowRole,
-                      [kAXStandardWindowSubrole, kAXDialogSubrole, "AXSystemDialog"].contains(AX.string(ax, kAXSubroleAttribute)),
-                      let id = spaces.windowID(ax) else { continue }
-                native.insert(id); elements[key(id)] = ax
+                guard let id = spaces.windowID(ax) else { continue }
+                current[id] = ax
             }
             let appRaw = raw.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
-            let serverIDs = Set(appRaw.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
-            native.formUnion(serverIDs.filter { elements[key($0)] != nil })
-            for entry in appRaw {
-                guard (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-                      let id = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
-                      let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
-                      let frame = CGRect(dictionaryRepresentation: bounds), frame.width > 1, frame.height > 1 else { continue }
-                // Off-Space windows may have no AX reference yet. Preserve them from the
-                // server inventory; acquire their AX reference only when the user selects one.
-                if elements[key(id)] != nil || !(entry[kCGWindowName as String] as? String ?? "").isEmpty
-                    || (frame.width >= 80 && frame.height >= 60 && !spaces.memberships(id).isEmpty) { native.insert(id) }
-            }
+            var cached = elements[session] ?? [:]
+            let native = SwitcherWindowDiscovery.candidates(current: current, cached: &cached, server: appRaw,
+                isValid: { id, ax in
+                    var owner: pid_t = 0
+                    return AXUIElementGetPid(ax, &owner) == .success && owner == pid
+                        && self.spaces.windowID(ax) == id
+                        && AX.string(ax, kAXRoleAttribute) == kAXWindowRole
+                        && [kAXStandardWindowSubrole, kAXDialogSubrole, "AXSystemDialog"].contains(AX.string(ax, kAXSubroleAttribute))
+                }, hasSpace: { !self.spaces.memberships($0).isEmpty })
+            var retained: [UInt32: AXUIElement] = [:]
             for id in native {
                 let entry = appRaw.first { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }
-                let ax = elements[key(id)]
+                let ax = cached[id]
                 let serverFrame = (entry?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
                 guard let frame = ax.flatMap({ AX.frame($0) }) ?? serverFrame, frame.width > 1, frame.height > 1 else { continue }
                 let memberships = Set(spaces.memberships(id))
@@ -89,13 +93,14 @@ final class SwitcherScanner: @unchecked Sendable {
                     spaceIndex: space?.record.index ?? 0, minimized: ax.map { AX.bool($0, kAXMinimizedAttribute) } ?? false,
                     hidden: app.isHidden, fullscreen: ax.map { AX.bool($0, "AXFullScreen") } ?? (space?.record.label.hasPrefix("フルスクリーン") == true),
                     tabGroup: nil)
-                alive.insert(key(id))
+                retained[id] = ax
                 result.append(TrackedSwitcherWindow(info: info, app: app, nativeID: id, element: ax))
                 if pid == frontPID && id == focusedID { activeWindow = key(id) }
                 if onScreenIDs.contains(id), !app.isHidden, !info.minimized, frame.contains(mouse) {
                     cursorWindows.insert(key(id))
                 }
             }
+            elements[session] = retained
             // Read only the native window chrome; never walk a web page or document tree.
             let appIndices = result.indices.filter { result[$0].app.processIdentifier == pid }
             var seenGroups = Set<String>()
@@ -138,7 +143,7 @@ final class SwitcherScanner: @unchecked Sendable {
                   let window = result.first(where: { $0.nativeID == id && cursorWindows.contains($0.info.id) }) else { continue }
             frontCursorApp = window.info.appID; break
         }
-        elements = elements.filter { alive.contains($0.key) }
+        elements = elements.filter { aliveSessions.contains($0.key) }
         let stack = Dictionary(uniqueKeysWithValues: raw.enumerated().compactMap { index, entry -> (UInt32, Int)? in
             (entry[kCGWindowNumber as String] as? NSNumber).map { ($0.uint32Value, index) }
         })

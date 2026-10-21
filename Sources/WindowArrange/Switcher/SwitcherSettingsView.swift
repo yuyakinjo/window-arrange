@@ -14,7 +14,8 @@ struct SwitcherSettingsView: View {
         HStack(spacing: 0) {
             settingsForm.frame(minWidth: 380)
             Divider()
-            SwitcherSettingsPreview(controller: controller, thumbnails: controller.previewThumbnails, trusted: model.trusted)
+            SwitcherSettingsPreview(controller: controller, thumbnails: controller.previewThumbnails,
+                                    trusted: model.trusted, canExclude: model.storageAvailable, onExclude: exclude)
                 .frame(width: 310)
         }
         .onAppear { controller.beginSettingsPreview() }
@@ -35,6 +36,7 @@ struct SwitcherSettingsView: View {
             }
             Section("表示対象") {
                 choice("アプリ", \.apps)
+                    .help(model.data.switcher.apps.helpText)
                 choice("Spaces", \.spaces)
                 choice("ディスプレイ", \.screens)
                 choice("最小化したウィンドウ", \.minimized)
@@ -42,6 +44,30 @@ struct SwitcherSettingsView: View {
                 Toggle("フルスクリーンのウィンドウを表示", isOn: binding(\.fullscreen))
                 choice("ウィンドウのないアプリ", \.windowless)
                 Text("切替画面は使用中のウィンドウがある画面に表示します。Spaceの所属を取得できない場合、Spacesで絞り込む一覧からは除外します。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("除外アプリ") {
+                if model.data.switcher.excludedApps.isEmpty {
+                    Text("除外しているアプリはありません。")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.data.switcher.excludedApps) { app in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(app.name)
+                                Text(app.id).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                            Spacer()
+                            Button("解除") {
+                                var settings = model.data.switcher
+                                settings.excludedApps.removeAll { $0.id == app.id }
+                                model.setSwitcherSettings(settings)
+                            }
+                            .accessibilityLabel("\(app.name)の除外を解除")
+                        }
+                    }
+                }
+                Text("プレビュー右上の−ボタンで、そのアプリのすべてのウィンドウを切替対象から除外します。除外設定は次回起動時も維持されます。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("並び順・まとめ方") {
@@ -83,7 +109,7 @@ struct SwitcherSettingsView: View {
                             .font(.system(.body, design: .monospaced)).frame(minWidth: 100)
                     }
                 }
-                Text("呼び出しキーは⌥・⌘・⌃のいずれかを含む組み合わせです。Shift＋呼び出しキーで逆順に開始できます。切替画面内では←・→でも前後に移動できます。次へ・前へ・決定・キャンセルは切替画面内だけで動作します。")
+                Text("呼び出しキーは⌥・⌘・⌃のいずれかを含む組み合わせです。Shift＋呼び出しキーで逆順に開始できます。切替画面内では←・→で前後、↑・↓で上下の行に移動できます。上下端では反対側の行に移動し、同じ列にウィンドウがなければ行の末尾を選びます。次へ・前へ・決定・キャンセルは切替画面内だけで動作します。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -107,6 +133,12 @@ struct SwitcherSettingsView: View {
             .onAppear { model.suspendForSwitcherRecording() }
         }
     }
+    private func exclude(_ window: SwitcherWindow) {
+        var settings = model.data.switcher
+        guard !settings.excludedApps.contains(where: { $0.id == window.appID }) else { return }
+        settings.excludedApps.append(SwitcherExcludedApp(id: window.appID, name: window.appName))
+        model.setSwitcherSettings(settings)
+    }
     private func binding<Value>(_ key: WritableKeyPath<SwitcherSettings, Value>) -> Binding<Value> {
         Binding(get: { model.data.switcher[keyPath: key] }, set: { value in
             var settings = model.data.switcher; settings[keyPath: key] = value; model.setSwitcherSettings(settings)
@@ -124,6 +156,8 @@ private struct SwitcherSettingsPreview: View {
     @ObservedObject var controller: WindowSwitcherController
     @ObservedObject var thumbnails: SwitcherThumbnails
     let trusted: Bool
+    let canExclude: Bool
+    var onExclude: (SwitcherWindow) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -150,10 +184,25 @@ private struct SwitcherSettingsPreview: View {
                                 SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
                                                    style: controller.settings.style, compact: true,
                                                    scale: controller.settings.effectiveWindowScale)
+                                    .overlay(alignment: .topTrailing) {
+                                        Button { onExclude(window.info) } label: {
+                                            Image(systemName: "minus.circle.fill")
+                                                .font(.system(size: 18, weight: .semibold))
+                                                .symbolRenderingMode(.palette)
+                                                .foregroundStyle(.primary, .background)
+                                                .frame(width: 28, height: 28)
+                                                .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(!canExclude)
+                                        .help("\(window.info.appName)のすべてのウィンドウを除外")
+                                        .accessibilityLabel("\(window.info.appName)を切替対象から除外")
+                                        .padding(4)
+                                    }
                                 Text(status(window.info)).font(.caption2).foregroundStyle(.secondary)
                                     .lineLimit(2).padding(.horizontal, 6)
                             }
-                            .accessibilityElement(children: .combine)
+                            .accessibilityElement(children: .contain)
                         }
                     }.padding(3)
                 }

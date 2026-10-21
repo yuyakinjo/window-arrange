@@ -15,6 +15,24 @@ struct WindowSwitcherTests {
     @Test func defaultIncludesAllStatesAndPlacesWindowlessAtEnd() {
         #expect(ids(SwitcherSettings()) == ["a1", "a2", "b2", "b1", "c"])
     }
+    @Test(arguments: SwitcherApps.allCases) func excludedAppsOverrideEveryApplicationFilter(_ filter: SwitcherApps) {
+        var settings = SwitcherSettings(); settings.apps = filter
+        settings.excludedApps = [SwitcherExcludedApp(id: "b", name: "Beta")]
+        #expect(!ids(settings).contains("b1"))
+        #expect(!ids(settings).contains("b2"))
+        settings.excludedApps.append(SwitcherExcludedApp(id: "c", name: "Gamma"))
+        #expect(!ids(settings).contains("c"))
+        settings.excludedApps.removeAll()
+        var defaults = SwitcherSettings(); defaults.apps = filter
+        #expect(ids(settings) == ids(defaults))
+    }
+    @Test func exclusionMatchesAppIdentityRatherThanNameAndSurvivesNewWindows() {
+        var settings = SwitcherSettings()
+        settings.excludedApps = [SwitcherExcludedApp(id: "a", name: "Old Name")]
+        let candidates = [SwitcherWindow(id: "new", appID: "a", appName: "New Name"),
+                          SwitcherWindow(id: "different", appID: "different", appName: "Old Name")]
+        #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["different"])
+    }
     @Test(arguments: SwitcherApps.allCases) func applicationFilters(_ filter: SwitcherApps) {
         var settings = SwitcherSettings(); settings.apps = filter
         let expected: Set<String>
@@ -90,6 +108,30 @@ struct WindowSwitcherTests {
         selection.reconcile(ids: ["c", "a"]); #expect(selection.selected == "a")
         selection.reconcile(ids: []); selection.move(1); #expect(selection.selected == nil)
     }
+    @Test func verticalNavigationKeepsColumnAndWrapsAtTopAndBottom() {
+        var selection = SwitcherSelection()
+        selection.open(ids: (0..<12).map(String.init), current: nil, backwards: false)
+        selection.select("2")
+        selection.moveVertically(1, columns: 4); #expect(selection.selected == "6")
+        selection.moveVertically(1, columns: 4); #expect(selection.selected == "10")
+        selection.moveVertically(1, columns: 4); #expect(selection.selected == "2")
+        selection.moveVertically(-1, columns: 4); #expect(selection.selected == "10")
+        selection.moveVertically(-1, columns: 4); #expect(selection.selected == "6")
+    }
+    @Test func verticalNavigationClampsShortLastRowAndHandlesOneRowOrEmptyList() {
+        var selection = SwitcherSelection()
+        selection.open(ids: (0..<6).map(String.init), current: nil, backwards: false)
+        selection.select("3")
+        selection.moveVertically(1, columns: 4); #expect(selection.selected == "5")
+        selection.moveVertically(-1, columns: 4); #expect(selection.selected == "1")
+        selection.select("0")
+        selection.moveVertically(-1, columns: 4); #expect(selection.selected == "4")
+        selection.reconcile(ids: ["0", "1", "2"]); selection.select("2")
+        selection.moveVertically(1, columns: 3); #expect(selection.selected == "2")
+        selection.moveVertically(-1, columns: 3); #expect(selection.selected == "2")
+        selection.reconcile(ids: [])
+        selection.moveVertically(1, columns: 4); #expect(selection.selected == nil)
+    }
     @Test func shortcutConflictIncludesHeldModifiersAndAutomaticSummonNext() {
         let settings = SwitcherSettings()
         #expect(settings.conflict(for: settings.previous, command: .previous) == nil)
@@ -110,6 +152,7 @@ struct WindowSwitcherTests {
         data.switcher.theme = .dark; data.switcher.style = .icons; data.switcher.release = .hold
         data.switcher.separateTabs = true; data.switcher.onePerApp = true
         data.switcher.windowScale = 1.35
+        data.switcher.excludedApps = [SwitcherExcludedApp(id: "com.example.editor", name: "Editor")]
         data.switcher.previous = Shortcut(keyCode: 123, modifiers: 0, label: "←")
         let decoded = try JSONDecoder().decode(AppData.self, from: JSONEncoder().encode(data))
         #expect(decoded.switcher == data.switcher)
@@ -124,6 +167,15 @@ struct WindowSwitcherTests {
         let decoded = try JSONDecoder().decode(AppData.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(decoded.switcher == data.switcher)
         #expect(decoded.switcher.windowScale == 1)
+    }
+    @Test func savedSettingsWithoutExcludedAppsKeepExistingPreferences() throws {
+        var settings = SwitcherSettings(); settings.apps = .active; settings.theme = .dark
+        settings.next = Shortcut(keyCode: 125, modifiers: 0, label: "↓")
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        json.removeValue(forKey: "excludedApps")
+        let decoded = try JSONDecoder().decode(SwitcherSettings.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == settings)
+        #expect(decoded.excludedApps.isEmpty)
     }
     @Test(arguments: [-10.0, 10.0]) func savedSizeIsLimitedToSliderRange(value: Double) throws {
         var settings = SwitcherSettings(); settings.windowScale = value
@@ -165,11 +217,17 @@ struct SwitcherKeyboardRoutingTests {
         #expect(SwitcherKeyRouting.command(key: key(124, heldModifiers), settings: settings, heldModifiers: heldModifiers) == .next)
         #expect(SwitcherKeyRouting.command(key: key(123, heldModifiers | 4096), settings: settings, heldModifiers: heldModifiers) == nil)
         #expect(SwitcherKeyRouting.command(key: key(124, heldModifiers | 512), settings: settings, heldModifiers: heldModifiers) == nil)
-        #expect(SwitcherKeyRouting.command(key: key(125, heldModifiers), settings: settings, heldModifiers: heldModifiers) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(125, heldModifiers), settings: settings, heldModifiers: heldModifiers) == .down)
+        #expect(SwitcherKeyRouting.command(key: key(126, heldModifiers), settings: settings, heldModifiers: heldModifiers) == .up)
+        #expect(SwitcherKeyRouting.command(key: key(125, heldModifiers | 512), settings: settings, heldModifiers: heldModifiers) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(126, heldModifiers | 4096), settings: settings, heldModifiers: heldModifiers) == nil)
     }
     @Test func explicitArrowBindingsTakePriorityOverNavigation() {
         var settings = SwitcherSettings(); settings.confirm = key(124); settings.cancel = key(123)
         #expect(SwitcherKeyRouting.command(key: key(124, 256), settings: settings, heldModifiers: 256) == .confirm)
         #expect(SwitcherKeyRouting.command(key: key(123), settings: settings, heldModifiers: 0) == .cancel)
+        settings.confirm = key(125); settings.cancel = key(126)
+        #expect(SwitcherKeyRouting.command(key: key(125, 256), settings: settings, heldModifiers: 256) == .confirm)
+        #expect(SwitcherKeyRouting.command(key: key(126), settings: settings, heldModifiers: 0) == .cancel)
     }
 }

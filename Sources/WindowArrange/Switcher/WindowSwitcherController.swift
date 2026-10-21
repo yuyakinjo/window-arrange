@@ -28,7 +28,7 @@ final class WindowSwitcherController: ObservableObject {
     private var settingsPreviewVisible = false
     private var initialSelection = false
     private var backwards = false
-    private var pendingMoves = 0
+    private var pendingMoves: [SwitcherAction] = []
     private var pendingCommit = false
     private var focusTask: Task<Void, Never>?
     private var focusRequest = SwitcherFocusRequest()
@@ -93,7 +93,7 @@ final class WindowSwitcherController: ObservableObject {
             app.processIdentifier != getpid() && app.activationPolicy == .regular
                 && inventory.windows.contains(where: { $0.app.processIdentifier == app.processIdentifier }) ? app : nil
         }
-        previewContext.activeApp = externalFront.map { $0.bundleIdentifier ?? "pid.\($0.processIdentifier)" } ?? active?.info.appID
+        previewContext.activeApp = externalFront?.switcherAppID ?? active?.info.appID
         previewContext.activeWindow = active?.info.id
         previewContext.visibleSpaces = inventory.visibleSpaces
         previewContext.screenID = active?.info.screenID ?? screenID(preferredScreen(inventory: inventory))
@@ -122,11 +122,11 @@ final class WindowSwitcherController: ObservableObject {
 
     func show(backwards: Bool = false, holding: Bool = false) {
         guard settings.enabled, isBusy?() != true else { return }
-        if isOpen { move(backwards ? -1 : 1); return }
+        if isOpen { navigate(backwards ? .previous : .next); return }
         guard AXIsProcessTrusted() else { requestAccessibility?(); return }
         guard keyboard.ensureEventTap() else { onError?(ArrangeError("切替キーを受信できません。アクセシビリティの許可を確認してください。")); return }
         cancelFocus(); focusRequest = SwitcherFocusRequest(); session = UUID()
-        self.backwards = backwards; initialSelection = false; pendingMoves = 0; pendingCommit = false
+        self.backwards = backwards; initialSelection = false; pendingMoves = []; pendingCommit = false
         let inventory = tracker.inventory
         let front = NSWorkspace.shared.frontmostApplication
         let screen = preferredScreen(inventory: inventory)
@@ -135,7 +135,7 @@ final class WindowSwitcherController: ObservableObject {
             !$0.info.windowless && !$0.info.hidden && !$0.info.minimized && $0.info.frame.contains(mouse)
                 && ($0.info.spaces.isEmpty || !$0.info.spaces.isDisjoint(with: inventory.visibleSpaces))
         }
-        context = SwitcherContext(activeApp: front?.bundleIdentifier ?? front.map { "pid.\($0.processIdentifier)" }, activeWindow: inventory.activeWindow,
+        context = SwitcherContext(activeApp: front?.switcherAppID, activeWindow: inventory.activeWindow,
             cursorApp: underCursor.first?.info.appID, cursorWindows: Set(underCursor.map(\.info.id)), visibleSpaces: inventory.visibleSpaces, screenID: screenID(screen))
         isOpen = true; loading = inventory.windows.isEmpty
         keyboard.begin(holding: holding)
@@ -160,18 +160,25 @@ final class WindowSwitcherController: ObservableObject {
     }
     func select(_ id: String) { selection.select(id); selectedID = selection.selected }
     func choose(_ id: String) { select(id); commit() }
-    private func handle(_ command: SwitcherCommand) {
+    private func handle(_ command: SwitcherAction) {
         guard isOpen else { return }
         switch command {
-        case .summon, .next: move(1)
-        case .previous: move(-1)
+        case .next, .previous, .up, .down: navigate(command)
         case .confirm: commit()
         case .cancel: dismiss()
         }
     }
-    private func move(_ delta: Int) {
-        if !initialSelection { pendingMoves += delta; return }
-        selection.move(delta); selectedID = selection.selected
+    private func navigate(_ command: SwitcherAction) {
+        if !initialSelection { pendingMoves.append(command); return }
+        switch command {
+        case .next: selection.move(1)
+        case .previous: selection.move(-1)
+        case .up, .down:
+            selection.moveVertically(command == .up ? -1 : 1,
+                                     columns: SwitcherLayout.columnCount(for: selection.ids.count))
+        default: return
+        }
+        selectedID = selection.selected
     }
     private func release() { if isOpen && settings.release == .focus { commit() } }
     private func inventoryChanged() {
@@ -220,7 +227,9 @@ final class WindowSwitcherController: ObservableObject {
             selection.reconcile(ids: ids)
         } else if !ids.isEmpty {
             selection.open(ids: ids, current: context.activeWindow, backwards: backwards)
-            selection.move(pendingMoves); pendingMoves = 0; initialSelection = true
+            initialSelection = true
+            let moves = pendingMoves; pendingMoves.removeAll()
+            moves.forEach { navigate($0) }
         }
         windows = ids.compactMap { byID[$0] }; selectedID = selection.selected
     }
@@ -391,11 +400,12 @@ struct SwitcherLayout {
     let outerPadding: CGFloat = 22
     let borderPadding: CGFloat = 1
     let gridPadding: CGFloat = 4
-    private let maximumColumns = 4
+    private static let maximumColumns = 4
 
-    var columns: Int { min(maximumColumns, max(1, windowCount)) }
+    static func columnCount(for windowCount: Int) -> Int { min(maximumColumns, max(1, windowCount)) }
+    var columns: Int { Self.columnCount(for: windowCount) }
     private var insets: CGFloat { 2 * (outerPadding + borderPadding + gridPadding) }
-    private var baseTileWidth: CGFloat { (1000 - insets - CGFloat(maximumColumns - 1) * spacing) / CGFloat(maximumColumns) }
+    private var baseTileWidth: CGFloat { (1000 - insets - CGFloat(Self.maximumColumns - 1) * spacing) / CGFloat(Self.maximumColumns) }
     var scale: CGFloat {
         let requested = requestedScale.isFinite ? min(1.5, max(0.7, requestedScale)) : 1
         let available = (maximumWidth - insets - CGFloat(columns - 1) * spacing) / CGFloat(columns)

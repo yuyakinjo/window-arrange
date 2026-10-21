@@ -15,7 +15,7 @@ final class SwitcherKeyboard {
     var active = false
     var suspended = false
     var onSummon: ((Bool) -> Void)?
-    var onCommand: ((SwitcherCommand) -> Void)?
+    var onCommand: ((SwitcherAction) -> Void)?
     var onRelease: (() -> Void)?
     var onOutsideClick: ((CGPoint) -> Bool)?
     var onInputFailure: (() -> Void)?
