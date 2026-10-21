@@ -97,6 +97,8 @@ enum IntegrationCheck {
                 print("SKIP: cross-Space check requires two existing normal Spaces")
                 return 0
             }
+            try await verifySnapshotCapture(windowID: id, childPID: child.processIdentifier,
+                                            spaces: spaces, desktops: desktops, original: original, other: other)
             try await spaces.move(window: id, to: other.record.id)
             print("PASS: move to another Space with membership verification")
             let client = try AccessibilityPlacementClient(element: window, accessibility: service, spaces: spaces)
@@ -139,6 +141,41 @@ enum IntegrationCheck {
             print("FAIL: \(error.localizedDescription)")
             return 1
         }
+    }
+    private static func verifySnapshotCapture(windowID: UInt32, childPID: pid_t, spaces: NativeSpaces,
+        desktops: [LiveSpace], original: LiveSpace, other: LiveSpace) async throws {
+        let before = try spaces.activeSpaces(includeFullscreen: true)
+        var failure: Error?
+        do {
+            try await spaces.move(window: windowID, to: other.record.id)
+            try await spaces.activate(original.record.id)
+            let cold = AccessibilityService(windowProvider: { app in
+                guard app.processIdentifier == childPID,
+                      let current = spaces.spaceForWindow(windowID),
+                      (try? spaces.activeSpaces())?.contains(where: { $0.record.id == current.record.id }) == true else { return [] }
+                return AX.value(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement] ?? []
+            })
+            let hidden = try await cold.windows(spaces: spaces)
+            guard hidden.windows.isEmpty else { throw ArrangeError("Snapshot fixture must initially be absent from AXWindows") }
+            let captured = try await cold.snapshotWindows(spaces: spaces, desktops: desktops.map(\.record))
+            guard captured.windows.count == 1, captured.windows[0].nativeID == windowID,
+                  captured.windows[0].spaceID == other.record.id else {
+                throw ArrangeError("Snapshot did not capture the inactive desktop's fixture exactly once")
+            }
+            let active = try spaces.activeSpaces(includeFullscreen: true)
+            let expected = before.map { $0.record.displayID == original.record.displayID ? original.record.id : $0.record.id }
+            guard Set(active.map { $0.record.id }) == Set(expected) else {
+                throw ArrangeError("Snapshot did not restore the previously visible desktops")
+            }
+            print("PASS: snapshot captures an inactive desktop with a cold AX cache, deduplicates and returns to original desktops")
+        } catch { failure = error }
+        do { try await spaces.move(window: windowID, to: original.record.id) }
+        catch { if failure == nil { failure = error } }
+        for space in before {
+            do { try await spaces.activate(space.record.id, includeFullscreen: true) }
+            catch { if failure == nil { failure = error } }
+        }
+        if let failure { throw failure }
     }
     private static func verifyHiddenWindowEnumeration(window: AXUIElement, windowID: UInt32, childPID: pid_t,
         spaces: NativeSpaces, savedSpace: LiveSpace,

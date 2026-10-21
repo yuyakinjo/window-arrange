@@ -152,11 +152,11 @@ final class AppModel: ObservableObject {
         do {
             try accessibility.requireAccess()
             let spaces = data.spacesEnabled ? try nativeSpaces.spaces().map(\.record) : []
-            let result = try await accessibility.windows(spaces: data.spacesEnabled ? nativeSpaces : nil)
-            guard !result.windows.isEmpty else { throw ArrangeError("記録できる通常ウィンドウがありません。アプリを開き、Spacesを一度ずつ表示してから再試行してください。") }
+            let result = try await accessibility.snapshotWindows(spaces: data.spacesEnabled ? nativeSpaces : nil, desktops: spaces) { self.progress = $0 }
+            guard !result.windows.isEmpty else { throw ArrangeError("記録できる通常ウィンドウがありません。アプリのウィンドウを開いてから再試行してください。") }
             let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ja_JP"); formatter.dateFormat = "M/d HH:mm"
             let snapshot = Snapshot(name: "レイアウト \(formatter.string(from: Date()))", backend: data.spacesEnabled ? .nativeSpaces : .accessibility,
-                                    displays: accessibility.displays(), spaces: spaces, windows: result.windows.map(\.record))
+                                    displays: accessibility.displays(), spaces: spaces, windows: result.windows)
             try update { $0.snapshots.insert(snapshot, at: 0); $0.selectedSnapshotID = snapshot.id }
             selectedID = snapshot.id; section = "snapshots"
             report = OperationReport(title: "Snapshotを保存しました", message: "\(snapshot.windows.count)ウィンドウを保存しました。" + (result.skipped > 0 ? " フルスクリーン・所属不明など\(result.skipped)件は対象外です。" : ""))

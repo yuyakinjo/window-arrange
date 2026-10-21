@@ -158,6 +158,21 @@ final class AccessibilityService {
         }
         return (result, skipped)
     }
+    func snapshotWindows(spaces: NativeSpaces?, desktops: [SpaceRecord],
+                         progress: (String) -> Void = { _ in }) async throws -> SnapshotWindowCollector.Result {
+        try requireAccess()
+        let scan = {
+            let result = try await self.windows(spaces: spaces)
+            return SnapshotWindowCollector.Result(windows: result.windows.map(\.record), skipped: result.skipped)
+        }
+        guard let spaces else { return try await scan() }
+        return try await SnapshotWindowCollector.collect(
+            desktops: desktops,
+            activeSpaces: { try spaces.activeSpaces(includeFullscreen: true).map(\.record) },
+            activate: { try await spaces.activate($0, includeFullscreen: true) },
+            scan: scan,
+            progress: progress)
+    }
     func restorationWindows(for snapshot: Snapshot, spaces: NativeSpaces?) async throws -> [LiveWindow] {
         var live = try await windows(spaces: spaces, requireKnownSpace: false).windows
         guard let spaces else { return live }

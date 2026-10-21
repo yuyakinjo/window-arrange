@@ -217,7 +217,7 @@ private struct SnapshotDetail: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 7) {
                             spaceButton("すべて", id: nil)
-                            ForEach(snapshot.spaces.filter { space in snapshot.windows.contains { $0.spaceID == space.id } }) { space in
+                            ForEach(snapshot.spaces) { space in
                                 spaceButton(space.label, id: space.id)
                             }
                         }
@@ -232,6 +232,10 @@ private struct SnapshotDetail: View {
                     Text("\(filtered.count) WINDOWS").font(.system(size: 10, design: .monospaced)).tracking(1).foregroundStyle(.tertiary)
                 }
                 VStack(spacing: 0) {
+                    if filtered.isEmpty {
+                        Text("このデスクトップに保存されたウィンドウはありません。")
+                            .font(.callout).foregroundStyle(.secondary).padding(.vertical, 16)
+                    }
                     ForEach(filtered) { window in
                         HStack(spacing: 11) {
                             AppIcon(bundleID: window.appID)
