@@ -57,11 +57,11 @@ final class SwitcherScanner: @unchecked Sendable {
             func key(_ id: UInt32) -> String { "\(session):\(id)" }
             let axApp = AXUIElementCreateApplication(pid)
             AXUIElementSetMessagingTimeout(axApp, 0.15)
-            let axWindows = AX.value(axApp, kAXWindowsAttribute) as? [AXUIElement] ?? []
+            let axWindows = AX.value(axApp, kAXWindowsAttribute) as? [AXUIElement]
             let focused = AX.element(axApp, kAXFocusedWindowAttribute)
             let focusedID = focused.flatMap { spaces.windowID($0) }
             var current: [UInt32: AXUIElement] = [:]
-            for ax in axWindows {
+            for ax in axWindows ?? [] {
                 AXUIElementSetMessagingTimeout(ax, 0.15)
                 guard let id = spaces.windowID(ax) else { continue }
                 current[id] = ax
@@ -75,7 +75,8 @@ final class SwitcherScanner: @unchecked Sendable {
                         && self.spaces.windowID(ax) == id
                         && AX.string(ax, kAXRoleAttribute) == kAXWindowRole
                         && [kAXStandardWindowSubrole, kAXDialogSubrole, "AXSystemDialog"].contains(AX.string(ax, kAXSubroleAttribute))
-                }, hasSpace: { !self.spaces.memberships($0).isEmpty })
+                }, hasSpace: { !self.spaces.memberships($0).isEmpty },
+                isOnVisibleSpace: { axWindows != nil && !visible.isDisjoint(with: self.spaces.memberships($0)) })
             var retained: [UInt32: AXUIElement] = [:]
             for id in native {
                 let entry = appRaw.first { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }

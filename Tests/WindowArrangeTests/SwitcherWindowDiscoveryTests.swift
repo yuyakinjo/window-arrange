@@ -78,4 +78,43 @@ struct SwitcherWindowDiscoveryTests {
         #expect(candidates.isEmpty)
         #expect(cached.isEmpty)
     }
+
+    @Test func chromeAddressBarPopupIsExcludedOnVisibleSpace() {
+        var cached: [UInt32: String] = [:]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [63: "browser"], cached: &cached,
+            server: [window(63, title: "window-name"), window(65, width: 744, height: 89)],
+            isValid: { _, _ in true }, hasSpace: { _ in true }, isOnVisibleSpace: { _ in true })
+        #expect(candidates == [63])
+    }
+
+    @Test func untitledServerWindowOnAnotherSpaceRemainsDiscoverable() {
+        var cached: [UInt32: String] = [:]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
+            server: [window(85)], isValid: { _, _ in false }, hasSpace: { _ in true },
+            isOnVisibleSpace: { _ in false })
+        #expect(candidates == [85])
+    }
+
+    @Test func visibleUntitledAXWindowsAndDialogsArePreserved() {
+        var cached: [UInt32: String] = [85: "minimized window"]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [86: "dialog"], cached: &cached,
+            server: [window(85), window(86, width: 744, height: 89)],
+            isValid: { _, _ in true }, hasSpace: { _ in true }, isOnVisibleSpace: { _ in true })
+        #expect(candidates == [85, 86])
+    }
+
+    @Test func failedAXQueryDoesNotDiscardUntitledServerWindows() {
+        var cached: [UInt32: String] = [:]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
+            server: [window(85)], isValid: { _, _ in false }, hasSpace: { _ in true })
+        #expect(candidates == [85])
+    }
+
+    @Test func namedServerWindowOnVisibleSpaceRemainsDiscoverable() {
+        var cached: [UInt32: String] = [:]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
+            server: [window(85, title: "document")], isValid: { _, _ in false }, hasSpace: { _ in true },
+            isOnVisibleSpace: { _ in true })
+        #expect(candidates == [85])
+    }
 }
