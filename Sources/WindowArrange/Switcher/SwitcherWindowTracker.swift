@@ -36,7 +36,14 @@ final class SwitcherScanner: @unchecked Sendable {
     ]
     let spaces = NativeSpaces()
     private var elements: [String: [UInt32: AXUIElement]] = [:]
+    private var requestedClosures: [String: Set<UInt32>] = [:]
     private var subscriptions: SwitcherAXSubscriptions?
+
+    func recordClose(_ target: TrackedSwitcherWindow) {
+        guard let id = target.nativeID else { return }
+        let session = "\(target.app.processIdentifier):\(target.app.launchDate?.timeIntervalSince1970 ?? 0)"
+        requestedClosures[session, default: []].insert(id)
+    }
 
     func scan(displays: [DisplayRecord], mouse: CGPoint, frontPID: pid_t?, notify: (@Sendable () -> Void)? = nil) -> SwitcherInventory {
         let apps = NSWorkspace.shared.runningApplications.filter {
@@ -67,6 +74,8 @@ final class SwitcherScanner: @unchecked Sendable {
                 current[id] = ax
             }
             let appRaw = raw.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+            let serverIDs = Set(appRaw.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
+            requestedClosures[session] = requestedClosures[session]?.intersection(serverIDs)
             var cached = elements[session] ?? [:]
             let native = SwitcherWindowDiscovery.candidates(current: current, cached: &cached, server: appRaw,
                 isValid: { id, ax in
@@ -76,7 +85,8 @@ final class SwitcherScanner: @unchecked Sendable {
                         && AX.string(ax, kAXRoleAttribute) == kAXWindowRole
                         && [kAXStandardWindowSubrole, kAXDialogSubrole, "AXSystemDialog"].contains(AX.string(ax, kAXSubroleAttribute))
                 }, hasSpace: { !self.spaces.memberships($0).isEmpty },
-                isOnVisibleSpace: { axWindows != nil && !visible.isDisjoint(with: self.spaces.memberships($0)) })
+                isOnVisibleSpace: { axWindows != nil && !visible.isDisjoint(with: self.spaces.memberships($0)) },
+                requestedClosures: axWindows == nil ? [] : requestedClosures[session] ?? [])
             var retained: [UInt32: AXUIElement] = [:]
             for id in native {
                 let entry = appRaw.first { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }
@@ -145,6 +155,7 @@ final class SwitcherScanner: @unchecked Sendable {
             frontCursorApp = window.info.appID; break
         }
         elements = elements.filter { aliveSessions.contains($0.key) }
+        requestedClosures = requestedClosures.filter { aliveSessions.contains($0.key) && !$0.value.isEmpty }
         let stack = Dictionary(uniqueKeysWithValues: raw.enumerated().compactMap { index, entry -> (UInt32, Int)? in
             (entry[kCGWindowNumber as String] as? NSNumber).map { ($0.uint32Value, index) }
         })
@@ -182,6 +193,7 @@ final class SwitcherWindowTracker {
     private var refreshTask: Task<Void, Never>?
     private var stopped = false
     private var running = false
+    private var scanWaiters: [CheckedContinuation<Void, Never>] = []
     private var dirty = false
     private var history: [String: (created: UInt64, focused: UInt64)] = [:]
     private var clock: UInt64 = 0
@@ -220,10 +232,20 @@ final class SwitcherWindowTracker {
             await self.refresh()
         }
     }
-    func refresh() async {
-        guard !running else { dirty = true; return }
+    func refresh(waitForCurrentScan: Bool = false) async {
+        if running {
+            if waitForCurrentScan {
+                await withCheckedContinuation { scanWaiters.append($0) }
+                await refresh(waitForCurrentScan: true)
+            } else { dirty = true }
+            return
+        }
         guard !stopped, AXIsProcessTrusted(), isSuspended?() != true else { return }
         running = true; dirty = false
+        defer {
+            let waiters = scanWaiters; scanWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
         let displays = AccessibilityService().displays()
         let mouse = CGEvent(source: nil)?.location ?? .zero
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -255,6 +277,10 @@ final class SwitcherWindowTracker {
     func recordFocus(_ id: String) {
         clock += 1; history[id]?.focused = clock; lastFocused = id; inventory.activeWindow = id
         if let index = inventory.windows.firstIndex(where: { $0.info.id == id }) { inventory.windows[index].info.focused = clock }
+    }
+    func recordClose(_ target: TrackedSwitcherWindow) {
+        let scanner = scanner
+        worker.async { scanner.recordClose(target) }
     }
 }
 

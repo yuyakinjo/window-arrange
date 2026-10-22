@@ -179,7 +179,10 @@ final class SwitcherKeyboard {
         swallowed.insert(code)
         let command = SwitcherKeyRouting.command(key: Shortcut(keyCode: UInt32(code), modifiers: Self.modifiers(event.flags), label: ""),
             settings: settings, heldModifiers: heldModifiers)
-        if let command { DispatchQueue.main.async { [weak self] in self?.onCommand?(command) } }
+        if let command {
+            if (command == .closeWindow || command == .quitApp), event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return nil }
+            DispatchQueue.main.async { [weak self] in self?.onCommand?(command) }
+        }
         return nil
     }
 }

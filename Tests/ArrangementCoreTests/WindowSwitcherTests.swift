@@ -155,8 +155,18 @@ struct WindowSwitcherTests {
         data.switcher.windowScale = 1.35
         data.switcher.excludedApps = [SwitcherExcludedApp(id: "com.example.editor", name: "Editor")]
         data.switcher.previous = Shortcut(keyCode: 123, modifiers: 0, label: "←")
+        data.switcher.closeWindow = Shortcut(keyCode: 13, modifiers: 4096, label: "⌃W")
+        data.switcher.quitApp = Shortcut(keyCode: 12, modifiers: 2048, label: "⌥Q")
         let decoded = try JSONDecoder().decode(AppData.self, from: JSONEncoder().encode(data))
         #expect(decoded.switcher == data.switcher)
+    }
+    @Test func savedSettingsGetCloseAndQuitDefaultsWithoutLosingCustomKeys() throws {
+        var settings = SwitcherSettings()
+        settings.next = Shortcut(keyCode: 124, modifiers: 0, label: "→")
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        json.removeValue(forKey: "closeWindow"); json.removeValue(forKey: "quitApp")
+        let decoded = try JSONDecoder().decode(SwitcherSettings.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == settings)
     }
     @Test func savedSettingsWithoutSizeKeepFiltersAndShortcuts() throws {
         var data = AppData()
@@ -198,6 +208,25 @@ struct WindowSwitcherTests {
 
 struct SwitcherKeyboardRoutingTests {
     func key(_ code: UInt32, _ modifiers: UInt32 = 0) -> Shortcut { Shortcut(keyCode: code, modifiers: modifiers, label: "") }
+    @Test(arguments: [UInt32(0), 256, 2048, 256 | 2048])
+    func closeAndQuitRequireCommandEvenWhenSummonModifiersAreStripped(held: UInt32) {
+        let settings = SwitcherSettings()
+        #expect(SwitcherKeyRouting.command(key: key(13, held | 256), settings: settings, heldModifiers: held) == .closeWindow)
+        #expect(SwitcherKeyRouting.command(key: key(12, held | 256), settings: settings, heldModifiers: held) == .quitApp)
+        #expect(SwitcherKeyRouting.command(key: key(13), settings: settings, heldModifiers: held) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(12), settings: settings, heldModifiers: held) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(13, held | 256 | 512), settings: settings, heldModifiers: held) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(12, held | 256 | 4096), settings: settings, heldModifiers: held) == nil)
+    }
+    @Test func closeAndQuitRespectCustomBindingsAndDetectConflicts() {
+        var settings = SwitcherSettings()
+        #expect(settings.conflict(for: settings.closeWindow, command: .confirm) == .closeWindow)
+        #expect(settings.conflict(for: settings.quitApp, command: .next) == .quitApp)
+        settings.closeWindow = key(13, 4096); settings.quitApp = key(12, 2048)
+        #expect(SwitcherKeyRouting.command(key: key(13, 256), settings: settings, heldModifiers: 256) == nil)
+        #expect(SwitcherKeyRouting.command(key: key(13, 256 | 4096), settings: settings, heldModifiers: 256) == .closeWindow)
+        #expect(SwitcherKeyRouting.command(key: key(12, 2048), settings: settings, heldModifiers: 0) == .quitApp)
+    }
     @Test func defaultSummonIsCommandTab() {
         let settings = SwitcherSettings()
         #expect(settings.summon.keyCode == 48)

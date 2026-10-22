@@ -31,7 +31,7 @@ enum SwitcherIntegrationCheck {
         app.activate(ignoringOtherApps: true)
         app.run()
     }
-    static func run() async -> Int32 {
+    static func run(actionsOnly: Bool = false) async -> Int32 {
         let previous = NSWorkspace.shared.frontmostApplication
         let child = Process(), prefix = "WindowArrange-Switcher-\(UUID().uuidString)"
         let fixtureBundle = FileManager.default.temporaryDirectory.appendingPathComponent("SwitcherFixture-\(UUID().uuidString).app")
@@ -74,24 +74,26 @@ enum SwitcherIntegrationCheck {
                   let b = inventory.first(where: { $0.info.title == "\(prefix) B" }), let axA = a.element else { throw ArrangeError("Fixture windows were not enumerated") }
             print("PASS: multiple windows of the same app are enumerated")
             try await controller.integrationFocus(b)
-            try await controller.integrationFocus(a)
-            print("PASS: exact focus between windows of the same app")
-            try AX.setBool(axA, kAXMinimizedAttribute, true)
-            try await Task.sleep(for: .milliseconds(400))
-            inventory = await controller.integrationInventory()
-            guard let minimized = inventory.first(where: { $0.info.id == a.info.id }), minimized.info.minimized else { throw ArrangeError("Minimized fixture missing from inventory") }
-            try await controller.integrationFocus(minimized)
-            guard !AX.bool(axA, kAXMinimizedAttribute) else { throw ArrangeError("Fixture remained minimized") }
-            print("PASS: minimized windows stay listed and are restored when selected")
-            a.app.hide(); try await Task.sleep(for: .milliseconds(250))
-            inventory = await controller.integrationInventory()
-            guard let hidden = inventory.first(where: { $0.info.id == a.info.id }), hidden.info.hidden else { throw ArrangeError("Hidden fixture missing from inventory") }
-            try await controller.integrationFocus(hidden)
-            print("PASS: hidden app is restored and the exact window is focused")
-            let nativeTabs = inventory.filter { $0.info.title.hasPrefix(prefix) && $0.info.tabGroup != nil }
-            guard nativeTabs.count >= 2 else { throw ArrangeError("Native tab group was not detected") }
-            if let inactive = nativeTabs.first(where: { $0.inactiveTab }) { try await controller.integrationFocus(inactive) }
-            print("PASS: native tabs are grouped and an inactive tab can be selected")
+            if !actionsOnly {
+                try await controller.integrationFocus(a)
+                print("PASS: exact focus between windows of the same app")
+                try AX.setBool(axA, kAXMinimizedAttribute, true)
+                try await Task.sleep(for: .milliseconds(400))
+                inventory = await controller.integrationInventory()
+                guard let minimized = inventory.first(where: { $0.info.id == a.info.id }), minimized.info.minimized else { throw ArrangeError("Minimized fixture missing from inventory") }
+                try await controller.integrationFocus(minimized)
+                guard !AX.bool(axA, kAXMinimizedAttribute) else { throw ArrangeError("Fixture remained minimized") }
+                print("PASS: minimized windows stay listed and are restored when selected")
+                a.app.hide(); try await Task.sleep(for: .milliseconds(250))
+                inventory = await controller.integrationInventory()
+                guard let hidden = inventory.first(where: { $0.info.id == a.info.id }), hidden.info.hidden else { throw ArrangeError("Hidden fixture missing from inventory") }
+                try await controller.integrationFocus(hidden)
+                print("PASS: hidden app is restored and the exact window is focused")
+                let nativeTabs = inventory.filter { $0.info.title.hasPrefix(prefix) && $0.info.tabGroup != nil }
+                guard nativeTabs.count >= 2 else { throw ArrangeError("Native tab group was not detected") }
+                if let inactive = nativeTabs.first(where: { $0.inactiveTab }) { try await controller.integrationFocus(inactive) }
+                print("PASS: native tabs are grouped and an inactive tab can be selected")
+            }
             controller.show()
             try await Task.sleep(for: .milliseconds(350))
             guard controller.isOpen else { throw ArrangeError("Switcher did not open") }
@@ -103,9 +105,53 @@ enum SwitcherIntegrationCheck {
             try await Task.sleep(for: .milliseconds(250))
             try controller.integrationRender(to: "/private/tmp/window-arrange-switcher-thumbnails.png")
             controller.dismiss()
+            settings.style = .icons
+            controller.configure(settings); controller.show()
+            controller.select(a.info.id)
+            guard controller.isOpen, controller.selectedID == a.info.id else { throw ArrangeError("Fixture A could not be selected") }
+            postCommand(13)
+            for _ in 0..<30 {
+                try await Task.sleep(for: .milliseconds(100))
+                inventory = await controller.integrationInventory()
+                if !inventory.contains(where: { $0.info.id == a.info.id }) { break }
+            }
+            if let failure { throw failure }
+            guard controller.integrationLastCommand == .closeWindow else { throw ArrangeError("Synthetic ⌘W did not reach the switcher keyboard handler") }
+            guard controller.isOpen, !inventory.contains(where: { $0.info.id == a.info.id }),
+                  inventory.contains(where: { $0.info.id == b.info.id }), !a.app.isTerminated else {
+                let liveAX = AX.value(AXUIElementCreateApplication(child.processIdentifier), kAXWindowsAttribute) as? [AXUIElement] ?? []
+                let server = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+                throw ArrangeError("⌘W did not close only the selected fixture window (open: \(controller.isOpen), A: \(inventory.contains { $0.info.id == a.info.id }), B: \(inventory.contains { $0.info.id == b.info.id }), terminated: \(a.app.isTerminated), AX: \(liveAX.map { AX.string($0, kAXTitleAttribute) }), server A: \(server.filter { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == a.nativeID }))")
+            }
+            guard controller.selectedID != a.info.id else { throw ArrangeError("Selection remained on the closed window") }
+            // A held key must not close the next selection after reconciliation.
+            controller.select(b.info.id)
+            guard controller.isOpen, controller.selectedID == b.info.id else { throw ArrangeError("Fixture B could not be selected") }
+            postCommand(13, repeating: true)
+            try await Task.sleep(for: .milliseconds(250))
+            inventory = await controller.integrationInventory()
+            guard inventory.contains(where: { $0.info.id == b.info.id }) else { throw ArrangeError("Repeated ⌘W closed another window") }
+            print("PASS: ⌘W closes the selected window, reconciles selection and ignores key repeat")
+            guard controller.isOpen, controller.selectedID == b.info.id else { throw ArrangeError("Fixture B lost selection before quit") }
+            postCommand(12)
+            for _ in 0..<30 {
+                if !child.isRunning { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            guard !child.isRunning, controller.isOpen else { throw ArrangeError("⌘Q did not terminate the selected fixture app") }
+            print("PASS: ⌘Q requests normal termination of the selected app")
+            controller.dismiss()
             if let failure { throw failure }
             return 0
         } catch { print("FAIL: \(error.localizedDescription)"); return 1 }
+    }
+    private static func postCommand(_ code: CGKeyCode, repeating: Bool = false) {
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+            event?.flags = .maskCommand
+            if down && repeating { event?.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
+            event?.post(tap: .cghidEventTap)
+        }
     }
 }
 #endif

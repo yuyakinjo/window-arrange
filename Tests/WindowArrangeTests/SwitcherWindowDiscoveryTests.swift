@@ -4,6 +4,21 @@ import Testing
 @testable import WindowArrange
 
 struct SwitcherWindowDiscoveryTests {
+    @Test func requestedCloseRemovesRetainedNamedSurfaceAndValidCachedReference() {
+        var cached: [UInt32: String] = [85: "retained closed window"]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
+            server: [window(85, title: "closed document")], isValid: { _, _ in true },
+            hasSpace: { _ in false }, requestedClosures: [85])
+        #expect(candidates.isEmpty)
+        #expect(cached.isEmpty)
+    }
+    @Test(arguments: [true, false]) func requestedCloseKeepsWindowWhenAppIsConfirmingOrCloseIsCancelled(exposed: Bool) {
+        var cached: [UInt32: String] = [85: "document"]
+        let candidates = SwitcherWindowDiscovery.candidates(current: exposed ? [85: "document"] : [:], cached: &cached,
+            server: [window(85, title: "document")], isValid: { _, _ in true },
+            hasSpace: { _ in !exposed }, requestedClosures: [85])
+        #expect(candidates == [85])
+    }
     private func window(_ id: UInt32, title: String = "", layer: Int = 0,
                         width: CGFloat = 1720, height: CGFloat = 1410) -> [String: Any] {
         [kCGWindowNumber as String: NSNumber(value: id), kCGWindowName as String: title,

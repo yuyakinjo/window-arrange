@@ -113,7 +113,9 @@ Spacesの所属を記録しない場合は「設定」のトグルをオフに�
 
 最小化・非表示の対象は、選択したときに復帰させます。別Spaceへの切替では対象ウィンドウを移動せず、そのSpaceの表示とフォーカスを切り替えます。Spacesとフルスクリーンの連携は既存機能と同様に非公開システムAPIに依存します。アプリやOSがAXウィンドウ参照を公開しない場合や操作を拒否した場合は切替に失敗することがあり、その理由を表示します。タブはアプリが標準のAXTabGroupを公開する場合に対応し、ブラウザー内部の任意のタブを列挙する機能ではありません。
 
-一覧から閉じる・最小化・終了などを実行する操作、検索、複数の呼び出しショートカット枠、ジェスチャー、CLIによる切替は追加していません。
+一覧で **⌘W** を押すと選択中のウィンドウを閉じ、**⌘Q** を押すとそのアプリの終了を要求します。対象は前面のアプリではなく、一覧で選択中の対象です。閉じる操作は対象の閉じるボタン、終了は通常の終了要求を使い、未保存の内容の確認は対象アプリに従います。ウィンドウのないアプリでは⌘Wは何もしません。一覧は開いたまま更新され、閉じた対象が消えると近くの対象を選びます。キーの長押しでは連続実行しません。「閉じる」「終了」のキーもショートカット設定で変更できます。
+
+一覧からの最小化、検索、複数の呼び出しショートカット枠、ジェスチャー、CLIによる切替は追加していません。
 
 「設定 → 起動」でログイン時の自動起動を変更できます。macOSのSMAppServiceを使い、実際の登録状態を表示します。システム側で許可待ちの場合はログイン項目の設定へのボタンを表示します。自動起動の設定はアプリバンドルをビルドして起動した状態で行ってください。
 
@@ -185,6 +187,7 @@ bun run build debug
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --integration-check
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --native-tiling-check
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --switcher-check
+"dist/Window Arrange.app/Contents/MacOS/WindowArrange" --switcher-actions-check
 "dist/Window Arrange.app/Contents/MacOS/WindowArrange" --switcher-preview
 ```
 
@@ -225,4 +228,6 @@ bun run build debug
 
 ウィンドウ切替の追加検証：`--switcher-check` は専用の一時アプリに生成したウィンドウだけを操作し、同一アプリ内のフォーカス、最小化・非表示からの復帰、標準タブを確認します。`--switcher-preview` はサンプルデータからライト／ダーク、2種類の表示形式、アイコン＋タイトルの上下配置を `/tmp/window-arrange-preview-*.png` に描画し、画面収録権限は要求しません。上配置の画像には `-top` が付きます。
 
-この実装時の環境では、既存の `--native-tiling-check` と新しい `--switcher-check` が、検証用ウィンドウのAXWindow参照を取得できず停止しました。ウィンドウ切替の実機操作、実ウィンドウのサムネイル取得、自動起動後の動作は未確認です。
+初回実装時の環境では、既存の `--native-tiling-check` と新しい `--switcher-check` が、検証用ウィンドウのAXWindow参照を取得できず停止しました。その時点ではウィンドウ切替の実機操作、実ウィンドウのサムネイル取得、自動起動後の動作は未確認でした。
+
+閉じる・終了の追加時には、Swiftの自動テスト125件とBunのテスト13件が成功しました。`--switcher-actions-check` は一時アプリだけを対象に、実際の⌘W・⌘Q入力、選択ウィンドウだけの閉鎖、一覧・選択の更新、長押し抑制、通常終了を確認します。この実機チェックは成功し、`--switcher-check` 全体は既存の最小化からの復帰で停止しました。

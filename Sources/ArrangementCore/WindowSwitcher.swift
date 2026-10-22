@@ -52,16 +52,17 @@ public enum SwitcherRelease: String, SwitcherChoice {
     public var title: String { self == .focus ? "選択したウィンドウに切替" : "一覧を表示したままにする" }
 }
 public enum SwitcherCommand: String, CaseIterable, Identifiable {
-    case summon, next, previous, confirm, cancel
+    case summon, next, previous, confirm, cancel, closeWindow, quitApp
     public var id: String { rawValue }
     public var title: String { switch self {
     case .summon: return "切替画面を開く"; case .next: return "次のウィンドウ"; case .previous: return "前のウィンドウ"
     case .confirm: return "決定"; case .cancel: return "キャンセル"
+    case .closeWindow: return "ウィンドウを閉じる"; case .quitApp: return "アプリを終了"
     } }
 }
 
 public enum SwitcherAction {
-    case next, previous, up, down, confirm, cancel
+    case next, previous, up, down, confirm, cancel, closeWindow, quitApp
 
     init(_ command: SwitcherCommand) {
         switch command {
@@ -69,6 +70,8 @@ public enum SwitcherAction {
         case .previous: self = .previous
         case .confirm: self = .confirm
         case .cancel: self = .cancel
+        case .closeWindow: self = .closeWindow
+        case .quitApp: self = .quitApp
         }
     }
 }
@@ -106,10 +109,12 @@ public struct SwitcherSettings: Codable, Equatable {
     public var previous = Shortcut(keyCode: 48, modifiers: 512, label: "⇧⇥")
     public var confirm = Shortcut(keyCode: 36, modifiers: 0, label: "↩")
     public var cancel = Shortcut(keyCode: 53, modifiers: 0, label: "Esc")
+    public var closeWindow = Shortcut(keyCode: 13, modifiers: 256, label: "⌘W")
+    public var quitApp = Shortcut(keyCode: 12, modifiers: 256, label: "⌘Q")
     public init() {}
     private enum CodingKeys: String, CodingKey {
         case enabled, apps, spaces, screens, minimized, hidden, fullscreen, windowless, order, onePerApp, separateTabs
-        case style, titlePosition, theme, windowScale, release, summon, next, previous, confirm, cancel, excludedApps
+        case style, titlePosition, theme, windowScale, release, summon, next, previous, confirm, cancel, closeWindow, quitApp, excludedApps
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -136,10 +141,12 @@ public struct SwitcherSettings: Codable, Equatable {
         previous = try values.decode(Shortcut.self, forKey: .previous)
         confirm = try values.decode(Shortcut.self, forKey: .confirm)
         cancel = try values.decode(Shortcut.self, forKey: .cancel)
+        closeWindow = try values.decodeIfPresent(Shortcut.self, forKey: .closeWindow) ?? closeWindow
+        quitApp = try values.decodeIfPresent(Shortcut.self, forKey: .quitApp) ?? quitApp
     }
     public subscript(_ command: SwitcherCommand) -> Shortcut {
-        get { switch command { case .summon: return summon; case .next: return next; case .previous: return previous; case .confirm: return confirm; case .cancel: return cancel } }
-        set { switch command { case .summon: summon = newValue; case .next: next = newValue; case .previous: previous = newValue; case .confirm: confirm = newValue; case .cancel: cancel = newValue } }
+        get { switch command { case .summon: return summon; case .next: return next; case .previous: return previous; case .confirm: return confirm; case .cancel: return cancel; case .closeWindow: return closeWindow; case .quitApp: return quitApp } }
+        set { switch command { case .summon: summon = newValue; case .next: next = newValue; case .previous: previous = newValue; case .confirm: confirm = newValue; case .cancel: cancel = newValue; case .closeWindow: closeWindow = newValue; case .quitApp: quitApp = newValue } }
     }
     /// Local commands are matched with the held summon modifiers removed, so Command+Tab
     /// continues a session whose local next key is Tab. Compare effective chords, not labels.
@@ -290,8 +297,10 @@ public enum SwitcherKeyRouting {
         let triggerModifiers = settings.summon.modifiers & ~heldModifiers
         if key.keyCode == settings.summon.keyCode && modifiers == triggerModifiers { return .next }
         if key.keyCode == settings.summon.keyCode && triggerModifiers & 512 == 0 && modifiers == triggerModifiers | 512 { return .previous }
-        if let command = [SwitcherCommand.cancel, .confirm, .previous, .next].first(where: {
+        if let command = [SwitcherCommand.cancel, .confirm, .previous, .next, .closeWindow, .quitApp].first(where: {
             let command = settings[$0]
+            // Closing/quitting still requires the configured modifiers to be physically held.
+            if ($0 == .closeWindow || $0 == .quitApp), key.modifiers & command.modifiers != command.modifiers { return false }
             return command.keyCode == key.keyCode && command.modifiers & ~heldModifiers == modifiers
         }) { return SwitcherAction(command) }
         // Arrow navigation supplements configured shortcuts while the switcher is open.

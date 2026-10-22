@@ -30,6 +30,7 @@ final class WindowSwitcherController: ObservableObject {
     private var backwards = false
     private var pendingMoves: [SwitcherAction] = []
     private var pendingCommit = false
+    private var windowActionID: UUID?
     private var focusTask: Task<Void, Never>?
     private var focusRequest = SwitcherFocusRequest()
     private var session = UUID()
@@ -126,7 +127,7 @@ final class WindowSwitcherController: ObservableObject {
         guard AXIsProcessTrusted() else { requestAccessibility?(); return }
         guard keyboard.ensureEventTap() else { onError?(ArrangeError("切替キーを受信できません。アクセシビリティの許可を確認してください。")); return }
         cancelFocus(); focusRequest = SwitcherFocusRequest(); session = UUID()
-        self.backwards = backwards; initialSelection = false; pendingMoves = []; pendingCommit = false
+        self.backwards = backwards; initialSelection = false; pendingMoves = []; pendingCommit = false; windowActionID = nil
         let inventory = tracker.inventory
         let front = NSWorkspace.shared.frontmostApplication
         let screen = preferredScreen(inventory: inventory)
@@ -162,10 +163,44 @@ final class WindowSwitcherController: ObservableObject {
     func choose(_ id: String) { select(id); commit() }
     private func handle(_ command: SwitcherAction) {
         guard isOpen else { return }
+        #if DEBUG
+        integrationLastCommand = command
+        #endif
         switch command {
         case .next, .previous, .up, .down: navigate(command)
         case .confirm: commit()
         case .cancel: dismiss()
+        case .closeWindow, .quitApp: performWindowAction(command)
+        }
+    }
+    private func performWindowAction(_ command: SwitcherAction) {
+        guard windowActionID == nil, let id = selection.selected,
+              let target = windows.first(where: { $0.info.id == id }), !target.app.isTerminated else { return }
+        if command == .closeWindow && target.info.windowless { return }
+        let actionID = UUID(), generation = session
+        windowActionID = actionID
+        Task { [weak self] in
+            guard let self else { return }
+            var failure: Error?
+            if command == .quitApp {
+                if !target.app.terminate() { failure = ArrangeError("「\(target.info.appName)」の終了を要求できませんでした。") }
+            } else {
+                let result: Error? = await withCheckedContinuation { continuation in
+                    self.focusWorker.async {
+                        do { try SwitcherWindowActions.close(target); continuation.resume(returning: nil) }
+                        catch { continuation.resume(returning: error) }
+                    }
+                }
+                failure = result
+                if result == nil { self.tracker.recordClose(target) }
+            }
+            // Reconcile against a scan started after the request, even if an older scan was in flight.
+            await self.tracker.refresh(waitForCurrentScan: true)
+            guard self.session == generation, self.windowActionID == actionID else { return }
+            self.windowActionID = nil
+            if let failure {
+                self.dismiss(); self.onError?(failure)
+            } else if self.pendingCommit { self.commit() }
         }
     }
     private func navigate(_ command: SwitcherAction) {
@@ -197,7 +232,7 @@ final class WindowSwitcherController: ObservableObject {
         }
         rebuild(); updateThumbnails()
         if let screen = panel?.screen { resizePanel(on: screen) }
-        if pendingCommit { commit() }
+        if pendingCommit && windowActionID == nil { commit() }
     }
     private func resizePanel(on screen: NSScreen) {
         guard let panel else { return }
@@ -238,6 +273,7 @@ final class WindowSwitcherController: ObservableObject {
     }
     private func commit() {
         guard isOpen else { return }
+        if windowActionID != nil { pendingCommit = true; return }
         if !initialSelection && loading { pendingCommit = true; return }
         guard let id = selection.selected, let target = windows.first(where: { $0.info.id == id }) else { dismiss(); return }
         let generation = session
@@ -324,6 +360,7 @@ final class WindowSwitcherController: ObservableObject {
         throw ArrangeError("macOSが「\(target.info.title)」への切替を完了しませんでした。対象のウィンドウを確認してください。")
     }
     #if DEBUG
+    private(set) var integrationLastCommand: SwitcherAction?
     func integrationInventory() async -> [TrackedSwitcherWindow] {
         await tracker.refresh()
         return tracker.inventory.windows

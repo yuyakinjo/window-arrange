@@ -103,9 +103,12 @@ struct Launcher {
             }
             app.run(); return
         }
-        if CommandLine.arguments.contains("--switcher-check") {
+        if CommandLine.arguments.contains("--switcher-check") || CommandLine.arguments.contains("--switcher-actions-check") {
             let app = NSApplication.shared; app.setActivationPolicy(.accessory)
-            Task { @MainActor in let status = await SwitcherIntegrationCheck.run(); fflush(stdout); exit(status) }
+            Task { @MainActor in
+                let status = await SwitcherIntegrationCheck.run(actionsOnly: CommandLine.arguments.contains("--switcher-actions-check"))
+                fflush(stdout); exit(status)
+            }
             app.run(); return
         }
         if let index = CommandLine.arguments.firstIndex(of: "--restore-saved-window"), CommandLine.arguments.indices.contains(index + 1),
