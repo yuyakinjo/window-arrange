@@ -214,6 +214,9 @@ public enum SwitcherList {
             (w.minimized && settings.minimized == .last) || (w.hidden && settings.hidden == .last) || (w.windowless && settings.windowless == .last)
         }
         let filtered = windows.filter { w in
+            // Apply after AX/WindowServer title resolution so every discovery path
+            // uses the same rule in both the switcher and the settings preview.
+            if !w.windowless && w.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
             if excludedAppIDs.contains(w.appID) { return false }
             switch settings.apps {
             case .all: break

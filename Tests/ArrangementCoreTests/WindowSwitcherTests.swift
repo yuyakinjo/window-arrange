@@ -15,6 +15,28 @@ struct WindowSwitcherTests {
     @Test func defaultIncludesAllStatesAndPlacesWindowlessAtEnd() {
         #expect(ids(SwitcherSettings()) == ["a1", "a2", "b2", "b1", "c"])
     }
+    @Test(arguments: SwitcherSpaces.allCases) func untitledWindowsAreExcludedAcrossSpacesAndStates(_ spaces: SwitcherSpaces) {
+        var settings = SwitcherSettings(); settings.spaces = spaces
+        let candidates = [
+            SwitcherWindow(id: "visible", title: "", spaces: [1]),
+            SwitcherWindow(id: "other", title: "", spaces: [2]),
+            SwitcherWindow(id: "minimized", title: "", spaces: [1], minimized: true),
+            SwitcherWindow(id: "hidden", title: "", spaces: [1], hidden: true),
+            SwitcherWindow(id: "whitespace", title: " \t\n", spaces: [1])
+        ]
+        #expect(SwitcherList.windows(candidates, settings: settings, context: context).isEmpty)
+    }
+    @Test func untitledWindowDoesNotReplaceNamedAppRepresentativeAndReturnsWhenTitleIsAvailable() {
+        var settings = SwitcherSettings(); settings.onePerApp = true
+        var candidates = [
+            SwitcherWindow(id: "untitled", appID: "a", focused: 20),
+            SwitcherWindow(id: "named", appID: "a", title: "Project", focused: 10),
+            SwitcherWindow(id: "windowless", appID: "b", windowless: true)
+        ]
+        #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["named", "windowless"])
+        candidates[0].title = "Recovered title"
+        #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["untitled", "windowless"])
+    }
     @Test(arguments: SwitcherApps.allCases) func excludedAppsOverrideEveryApplicationFilter(_ filter: SwitcherApps) {
         var settings = SwitcherSettings(); settings.apps = filter
         settings.excludedApps = [SwitcherExcludedApp(id: "b", name: "Beta")]
@@ -29,8 +51,8 @@ struct WindowSwitcherTests {
     @Test func exclusionMatchesAppIdentityRatherThanNameAndSurvivesNewWindows() {
         var settings = SwitcherSettings()
         settings.excludedApps = [SwitcherExcludedApp(id: "a", name: "Old Name")]
-        let candidates = [SwitcherWindow(id: "new", appID: "a", appName: "New Name"),
-                          SwitcherWindow(id: "different", appID: "different", appName: "Old Name")]
+        let candidates = [SwitcherWindow(id: "new", appID: "a", appName: "New Name", title: "New window"),
+                          SwitcherWindow(id: "different", appID: "different", appName: "Old Name", title: "Other window")]
         #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["different"])
     }
     @Test(arguments: SwitcherApps.allCases) func applicationFilters(_ filter: SwitcherApps) {
