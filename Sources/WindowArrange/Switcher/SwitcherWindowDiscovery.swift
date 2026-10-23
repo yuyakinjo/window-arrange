@@ -8,7 +8,8 @@ enum SwitcherWindowDiscovery {
                                       server: [[String: Any]], isValid: (UInt32, Reference) -> Bool,
                                       hasSpace: (UInt32) -> Bool,
                                       isOnVisibleSpace: (UInt32) -> Bool = { _ in false },
-                                      requestedClosures: Set<UInt32> = []) -> Set<UInt32> {
+                                      requestedClosures: Set<UInt32> = [],
+                                      allowsServerOnlyWindows: Bool = true) -> Set<UInt32> {
         // A retained NSWindow can keep its named server surface and AX reference
         // after closing. Only suppress a requested close once it leaves AXWindows
         // and all Spaces; save confirmations/cancellation keep the window listed.
@@ -22,6 +23,11 @@ enum SwitcherWindowDiscovery {
         cached = cached.filter { !closed.contains($0.key) && cacheableServerIDs.contains($0.key) && isValid($0.key, $0.value) }
         for (id, reference) in current where isValid(id, reference) { cached[id] = reference }
         var result = Set(cached.keys)
+        // Accessory apps can retain named, layer-zero backing surfaces while
+        // exposing no actual windows (for example, CodexBar's menu-bar popover).
+        // Require a current or validated cached AX reference for these apps;
+        // their real settings windows and dialogs still remain discoverable.
+        guard allowsServerOnlyWindows else { return result }
         for entry in server {
             guard (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
                   let id = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,

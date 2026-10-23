@@ -4,6 +4,40 @@ import Testing
 @testable import WindowArrange
 
 struct SwitcherWindowDiscoveryTests {
+    @Test func accessoryAppWithoutAXWindowsExcludesNamedBackingSurface() {
+        var cached: [UInt32: String] = [:]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
+            server: [window(179, title: "Claude", width: 800, height: 612)],
+            isValid: { _, _ in true }, hasSpace: { _ in true }, allowsServerOnlyWindows: false)
+        #expect(candidates.isEmpty)
+    }
+
+    @Test func accessoryAppKeepsRealSettingsWindowsAndDialogs() {
+        var cached: [UInt32: String] = [:]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [85: "settings", 86: "dialog"], cached: &cached,
+            server: [window(85, title: "Settings"), window(86, title: "Dialog", layer: 3)],
+            isValid: { _, _ in true }, hasSpace: { _ in false }, allowsServerOnlyWindows: false)
+        #expect(candidates == [85, 86])
+    }
+
+    @Test func accessoryAppKeepsValidatedWindowOnAnotherSpace() {
+        var cached: [UInt32: String] = [85: "settings"]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
+            server: [window(85, title: "Settings")], isValid: { _, _ in true },
+            hasSpace: { _ in true }, allowsServerOnlyWindows: false)
+        #expect(candidates == [85])
+        #expect(cached[85] == "settings")
+    }
+
+    @Test func accessoryAppDoesNotRediscoverSurfaceAfterAXReferenceBecomesInvalid() {
+        var cached: [UInt32: String] = [179: "dead popover"]
+        let candidates = SwitcherWindowDiscovery.candidates(current: [179: "dead popover"], cached: &cached,
+            server: [window(179, title: "Claude")], isValid: { _, _ in false },
+            hasSpace: { _ in true }, allowsServerOnlyWindows: false)
+        #expect(candidates.isEmpty)
+        #expect(cached.isEmpty)
+    }
+
     @Test func requestedCloseRemovesRetainedNamedSurfaceAndValidCachedReference() {
         var cached: [UInt32: String] = [85: "retained closed window"]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,

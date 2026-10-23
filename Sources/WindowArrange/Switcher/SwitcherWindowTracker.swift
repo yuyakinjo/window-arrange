@@ -86,7 +86,8 @@ final class SwitcherScanner: @unchecked Sendable {
                         && [kAXStandardWindowSubrole, kAXDialogSubrole, "AXSystemDialog"].contains(AX.string(ax, kAXSubroleAttribute))
                 }, hasSpace: { !self.spaces.memberships($0).isEmpty },
                 isOnVisibleSpace: { axWindows != nil && !visible.isDisjoint(with: self.spaces.memberships($0)) },
-                requestedClosures: axWindows == nil ? [] : requestedClosures[session] ?? [])
+                requestedClosures: axWindows == nil ? [] : requestedClosures[session] ?? [],
+                allowsServerOnlyWindows: app.activationPolicy == .regular)
             var retained: [UInt32: AXUIElement] = [:]
             for id in native {
                 let entry = appRaw.first { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }
