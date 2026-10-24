@@ -43,7 +43,7 @@ struct SwitcherSettingsView: View {
                 choice("非表示のアプリ", \.hidden)
                 Toggle("フルスクリーンのウィンドウを表示", isOn: binding(\.fullscreen))
                 choice("ウィンドウのないアプリ", \.windowless)
-                Text("切替画面は使用中のウィンドウがある画面に表示します。Spaceの所属を取得できない場合、Spacesで絞り込む一覧からは除外します。")
+                Text("切替画面は使用中のウィンドウがある画面に表示します。ウィンドウのないアプリにはSpaces・ディスプレイの絞り込みを適用しません。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("除外アプリ") {

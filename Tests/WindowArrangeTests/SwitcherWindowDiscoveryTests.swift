@@ -8,7 +8,7 @@ struct SwitcherWindowDiscoveryTests {
         var cached: [UInt32: String] = [:]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
             server: [window(179, title: "Claude", width: 800, height: 612)],
-            isValid: { _, _ in true }, hasSpace: { _ in true }, allowsServerOnlyWindows: false)
+            isValid: { _, _ in true }, hasSpace: { _ in true })
         #expect(candidates.isEmpty)
     }
 
@@ -16,7 +16,7 @@ struct SwitcherWindowDiscoveryTests {
         var cached: [UInt32: String] = [:]
         let candidates = SwitcherWindowDiscovery.candidates(current: [85: "settings", 86: "dialog"], cached: &cached,
             server: [window(85, title: "Settings"), window(86, title: "Dialog", layer: 3)],
-            isValid: { _, _ in true }, hasSpace: { _ in false }, allowsServerOnlyWindows: false)
+            isValid: { _, _ in true }, hasSpace: { _ in false })
         #expect(candidates == [85, 86])
     }
 
@@ -24,7 +24,7 @@ struct SwitcherWindowDiscoveryTests {
         var cached: [UInt32: String] = [85: "settings"]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
             server: [window(85, title: "Settings")], isValid: { _, _ in true },
-            hasSpace: { _ in true }, allowsServerOnlyWindows: false)
+            hasSpace: { _ in true })
         #expect(candidates == [85])
         #expect(cached[85] == "settings")
     }
@@ -33,7 +33,7 @@ struct SwitcherWindowDiscoveryTests {
         var cached: [UInt32: String] = [179: "dead popover"]
         let candidates = SwitcherWindowDiscovery.candidates(current: [179: "dead popover"], cached: &cached,
             server: [window(179, title: "Claude")], isValid: { _, _ in false },
-            hasSpace: { _ in true }, allowsServerOnlyWindows: false)
+            hasSpace: { _ in true })
         #expect(candidates.isEmpty)
         #expect(cached.isEmpty)
     }
@@ -77,20 +77,20 @@ struct SwitcherWindowDiscoveryTests {
         #expect(cached[85] == "editor")
     }
 
-    @Test func cachedPanelOmittedFromAXDoesNotReturnEvenIfItsReferenceStillResponds() {
+    @Test func cachedPanelIsEvictedWhenItNoLongerPassesEligibility() {
         var cached: [UInt32: String] = [250: "old popup"]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
             server: [window(250, layer: 3, width: 84, height: 77)],
-            isValid: { _, _ in true }, hasSpace: { _ in false })
+            isValid: { _, _ in false }, hasSpace: { _ in false })
         #expect(candidates.isEmpty)
         #expect(cached.isEmpty)
     }
 
-    @Test func ordinaryWindowRemainsDiscoverableAfterItsAXReferenceBecomesInvalid() {
+    @Test func invalidAXReferenceCannotBeReplacedByServerGeometry() {
         var cached: [UInt32: String] = [85: "dead AX reference"]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
             server: [window(85)], isValid: { _, _ in false }, hasSpace: { _ in true })
-        #expect(candidates == [85])
+        #expect(candidates.isEmpty)
         #expect(cached.isEmpty)
     }
 
@@ -132,38 +132,47 @@ struct SwitcherWindowDiscoveryTests {
         var cached: [UInt32: String] = [:]
         let candidates = SwitcherWindowDiscovery.candidates(current: [63: "browser"], cached: &cached,
             server: [window(63, title: "window-name"), window(65, width: 744, height: 89)],
-            isValid: { _, _ in true }, hasSpace: { _ in true }, isOnVisibleSpace: { _ in true })
+            isValid: { _, _ in true }, hasSpace: { _ in true })
         #expect(candidates == [63])
     }
 
-    @Test func untitledServerWindowOnAnotherSpaceRemainsDiscoverable() {
+    @Test func otherSpaceServerWindowWaitsForAXSemantics() {
         var cached: [UInt32: String] = [:]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
-            server: [window(85)], isValid: { _, _ in false }, hasSpace: { _ in true },
-            isOnVisibleSpace: { _ in false })
-        #expect(candidates == [85])
+            server: [window(85)], isValid: { _, _ in false }, hasSpace: { _ in true })
+        #expect(candidates.isEmpty)
     }
 
     @Test func visibleUntitledAXWindowsAndDialogsArePreserved() {
         var cached: [UInt32: String] = [85: "minimized window"]
         let candidates = SwitcherWindowDiscovery.candidates(current: [86: "dialog"], cached: &cached,
             server: [window(85), window(86, width: 744, height: 89)],
-            isValid: { _, _ in true }, hasSpace: { _ in true }, isOnVisibleSpace: { _ in true })
+            isValid: { _, _ in true }, hasSpace: { _ in true })
         #expect(candidates == [85, 86])
     }
 
-    @Test func failedAXQueryDoesNotDiscardUntitledServerWindows() {
+    @Test func failedAXQueryDoesNotInventWindowsFromServerSurfaces() {
         var cached: [UInt32: String] = [:]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
             server: [window(85)], isValid: { _, _ in false }, hasSpace: { _ in true })
-        #expect(candidates == [85])
+        #expect(candidates.isEmpty)
     }
 
-    @Test func namedServerWindowOnVisibleSpaceRemainsDiscoverable() {
+    @Test func serverTitleAloneDoesNotMakeASwitchDestination() {
         var cached: [UInt32: String] = [:]
         let candidates = SwitcherWindowDiscovery.candidates(current: [:], cached: &cached,
-            server: [window(85, title: "document")], isValid: { _, _ in false }, hasSpace: { _ in true },
-            isOnVisibleSpace: { _ in true })
+            server: [window(85, title: "document")], isValid: { _, _ in false }, hasSpace: { _ in true })
+        #expect(candidates.isEmpty)
+    }
+
+    @Test func freshReferenceReplacesCachedSemanticsWithoutQueryingBoth() {
+        var cached: [UInt32: String] = [85: "old reference"]
+        var checked: [String] = []
+        let candidates = SwitcherWindowDiscovery.candidates(current: [85: "new reference"], cached: &cached,
+            server: [window(85)], isValid: { _, reference in checked.append(reference); return true },
+            hasSpace: { _ in true })
         #expect(candidates == [85])
+        #expect(cached[85] == "new reference")
+        #expect(checked == ["new reference"])
     }
 }

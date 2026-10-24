@@ -210,13 +210,7 @@ public struct SwitcherContext {
 public enum SwitcherList {
     public static func windows(_ windows: [SwitcherWindow], settings: SwitcherSettings, context: SwitcherContext) -> [SwitcherWindow] {
         let excludedAppIDs = Set(settings.excludedApps.map(\.id))
-        func trailing(_ w: SwitcherWindow) -> Bool {
-            (w.minimized && settings.minimized == .last) || (w.hidden && settings.hidden == .last) || (w.windowless && settings.windowless == .last)
-        }
         let filtered = windows.filter { w in
-            // Apply after AX/WindowServer title resolution so every discovery path
-            // uses the same rule in both the switcher and the settings preview.
-            if !w.windowless && w.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
             if excludedAppIDs.contains(w.appID) { return false }
             switch settings.apps {
             case .all: break
@@ -225,14 +219,16 @@ public enum SwitcherList {
             case .underCursor: if !context.cursorWindows.contains(w.id) { return false }
             case .appUnderCursor: if w.appID != context.cursorApp { return false }
             }
+            if w.hidden && settings.hidden == .hide { return false }
+            // AltTab treats windowless apps independently of Space, display and
+            // window state: they have no window to which those filters can apply.
+            if w.windowless { return settings.windowless != .hide && settings.apps != .underCursor }
             if settings.spaces != .all {
-                // Unknown membership cannot prove a window belongs to a non-visible Space.
                 let visible = !w.spaces.isDisjoint(with: context.visibleSpaces)
-                if w.windowless || w.spaces.isEmpty || (settings.spaces == .visible ? !visible : visible) { return false }
+                if settings.spaces == .visible ? !visible : visible { return false }
             }
             if settings.screens == .switcher && w.screenID != context.screenID { return false }
-            return !(w.minimized && settings.minimized == .hide) && !(w.hidden && settings.hidden == .hide)
-                && !(!settings.fullscreen && w.fullscreen) && !(w.windowless && settings.windowless == .hide)
+            return !(w.minimized && settings.minimized == .hide) && !(!settings.fullscreen && w.fullscreen)
         }
         // Choose the most recently focused tab/app representative independently of display order.
         let representatives = filtered.sorted { $0.focused == $1.focused ? $0.id < $1.id : $0.focused > $1.focused }
@@ -243,7 +239,11 @@ public enum SwitcherList {
             return true
         }
         return admitted.sorted { a, b in
-            if trailing(a) != trailing(b) { return !trailing(a) }
+            // AltTab orders these buckets separately, with windowless apps last,
+            // then hidden apps, then minimized windows, before the chosen sort.
+            if settings.windowless == .last && a.windowless != b.windowless { return !a.windowless }
+            if settings.hidden == .last && a.hidden != b.hidden { return !a.hidden }
+            if settings.minimized == .last && a.minimized != b.minimized { return !a.minimized }
             switch settings.order {
             case .recent: if a.focused != b.focused { return a.focused > b.focused }
             case .created: if a.created != b.created { return a.created > b.created }

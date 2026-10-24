@@ -32,11 +32,13 @@ final class SwitcherScanner: @unchecked Sendable {
     // Exclude the apps before AX/WindowServer discovery and the windowless fallback.
     private static let excludedBundleIDs: Set<String> = [
         "com.apple.controlcenter",
-        "com.apple.notificationcenterui"
+        "com.apple.notificationcenterui",
+        "com.apple.WindowManager"
     ]
     let spaces = NativeSpaces()
     private var elements: [String: [UInt32: AXUIElement]] = [:]
     private var requestedClosures: [String: Set<UInt32>] = [:]
+    private let axResolver = SwitcherAXWindowResolver()
     private var subscriptions: SwitcherAXSubscriptions?
 
     func recordClose(_ target: TrackedSwitcherWindow) {
@@ -73,37 +75,82 @@ final class SwitcherScanner: @unchecked Sendable {
                 guard let id = spaces.windowID(ax) else { continue }
                 current[id] = ax
             }
+            if let focused, let focusedID,
+               current[focusedID] != nil || requestedClosures[session]?.contains(focusedID) != true {
+                current[focusedID] = focused
+            }
             let appRaw = raw.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+            let entries = Dictionary(uniqueKeysWithValues: appRaw.compactMap { entry -> (UInt32, [String: Any])? in
+                (entry[kCGWindowNumber as String] as? NSNumber).map { ($0.uint32Value, entry) }
+            })
             let serverIDs = Set(appRaw.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
             requestedClosures[session] = requestedClosures[session]?.intersection(serverIDs)
             var cached = elements[session] ?? [:]
+            // AXWindows alone is incomplete on other Spaces. Acquire semantics for
+            // missing server surfaces; a title/size alone never admits a window.
+            let unresolved = Set(appRaw.compactMap { entry -> UInt32? in
+                guard let id = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                      current[id] == nil, cached[id] == nil,
+                      let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+                      let frame = CGRect(dictionaryRepresentation: bounds),
+                      (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0
+                        || (frame.width >= 100 && frame.height >= 50) else { return nil }
+                let memberships = Set(spaces.memberships(id))
+                // Do not spend remote-token IPC on ordered-out backing surfaces.
+                // A missing root must be drawn, hidden with its app, or on another Space.
+                guard onScreenIDs.contains(id) || app.isHidden
+                    || (!memberships.isEmpty && memberships.isDisjoint(with: visible)) else { return nil }
+                return id
+            })
+            cached.merge(axResolver.resolve(pid: pid, session: session, ids: unresolved, spaces: spaces)) { _, fresh in fresh }
+            var facts: [UInt32: (frame: CGRect, title: String, memberships: Set<UInt64>, minimized: Bool, fullscreen: Bool)] = [:]
             let native = SwitcherWindowDiscovery.candidates(current: current, cached: &cached, server: appRaw,
                 isValid: { id, ax in
+                    // Remote-token probing uses a short timeout. Restore the
+                    // ordinary query budget once an actual window root is found.
+                    AXUIElementSetMessagingTimeout(ax, 0.15)
                     var owner: pid_t = 0
-                    return AXUIElementGetPid(ax, &owner) == .success && owner == pid
-                        && self.spaces.windowID(ax) == id
-                        && AX.string(ax, kAXRoleAttribute) == kAXWindowRole
-                        && [kAXStandardWindowSubrole, kAXDialogSubrole, "AXSystemDialog"].contains(AX.string(ax, kAXSubroleAttribute))
+                    guard AXUIElementGetPid(ax, &owner) == .success, owner == pid,
+                          self.spaces.windowID(ax) == id else { return false }
+                    let entry = entries[id]
+                    let serverFrame = (entry?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+                    guard let frame = AX.frame(ax) ?? serverFrame else { return false }
+                    let memberships = Set(self.spaces.memberships(id))
+                    let minimized = AX.bool(ax, kAXMinimizedAttribute)
+                    let fullscreen = AX.bool(ax, "AXFullScreen") || allSpaces.contains {
+                        memberships.contains($0.runtimeID) && $0.record.label.hasPrefix("フルスクリーン")
+                    }
+                    let title = AX.value(ax, kAXTitleAttribute) as? String ?? ""
+                    // AltTab uses AX meaning for admission, not WindowServer's
+                    // possibly stale title. Keep the server title only for display.
+                    guard SwitcherWindowEligibility.includes(frame: frame,
+                        level: (entry?[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
+                        title: title, role: AX.value(ax, kAXRoleAttribute) as? String,
+                        subrole: AX.value(ax, kAXSubroleAttribute) as? String,
+                        main: AX.bool(ax, kAXMainAttribute), fullscreen: fullscreen,
+                        focused: pid == frontPID && focusedID == id) else { return false }
+                    if !minimized && !app.isHidden {
+                        if (entry?[kCGWindowAlpha as String] as? NSNumber)?.doubleValue == 0 { return false }
+                        // Being off-screen on another Space is legitimate. An
+                        // ordered-out surface on a shown Space is an internal window.
+                        if entry != nil, !onScreenIDs.contains(id), !visible.isEmpty,
+                           memberships.isEmpty || !memberships.isDisjoint(with: visible) { return false }
+                    }
+                    facts[id] = (frame, title.isEmpty ? entry?[kCGWindowName as String] as? String ?? "" : title,
+                                 memberships, minimized, fullscreen)
+                    return true
                 }, hasSpace: { !self.spaces.memberships($0).isEmpty },
-                isOnVisibleSpace: { axWindows != nil && !visible.isDisjoint(with: self.spaces.memberships($0)) },
-                requestedClosures: axWindows == nil ? [] : requestedClosures[session] ?? [],
-                allowsServerOnlyWindows: app.activationPolicy == .regular)
+                requestedClosures: axWindows == nil ? [] : requestedClosures[session] ?? [])
             var retained: [UInt32: AXUIElement] = [:]
             for id in native {
-                let entry = appRaw.first { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }
                 let ax = cached[id]
-                let serverFrame = (entry?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
-                guard let frame = ax.flatMap({ AX.frame($0) }) ?? serverFrame, frame.width > 1, frame.height > 1 else { continue }
-                let memberships = Set(spaces.memberships(id))
+                guard let fact = facts[id] else { continue }
+                let frame = fact.frame, memberships = fact.memberships, title = fact.title
                 let space = allSpaces.first { memberships.contains($0.runtimeID) }
-                let title = ax.map { AX.string($0, kAXTitleAttribute) }.flatMap { $0.isEmpty ? nil : $0 } ?? entry?[kCGWindowName as String] as? String ?? ""
-                // macOS exposes its tile divider as a layer-zero WindowServer
-                // window, but it is not an application window we can focus.
-                if appID == "com.apple.WindowManager", title == "Tiling Handle Window" { continue }
                 let info = SwitcherWindow(id: key(id), appID: appID, appName: app.localizedName ?? appID, title: title, frame: frame,
                     screenID: space?.record.displayID ?? Layout.display(for: frame, in: displays)?.id ?? "", spaces: memberships,
-                    spaceIndex: space?.record.index ?? 0, minimized: ax.map { AX.bool($0, kAXMinimizedAttribute) } ?? false,
-                    hidden: app.isHidden, fullscreen: ax.map { AX.bool($0, "AXFullScreen") } ?? (space?.record.label.hasPrefix("フルスクリーン") == true),
+                    spaceIndex: space?.record.index ?? 0, minimized: fact.minimized,
+                    hidden: app.isHidden, fullscreen: fact.fullscreen,
                     tabGroup: nil)
                 retained[id] = ax
                 result.append(TrackedSwitcherWindow(info: info, app: app, nativeID: id, element: ax))
@@ -156,6 +203,7 @@ final class SwitcherScanner: @unchecked Sendable {
             frontCursorApp = window.info.appID; break
         }
         elements = elements.filter { aliveSessions.contains($0.key) }
+        axResolver.retain(sessions: aliveSessions)
         requestedClosures = requestedClosures.filter { aliveSessions.contains($0.key) && !$0.value.isEmpty }
         let stack = Dictionary(uniqueKeysWithValues: raw.enumerated().compactMap { index, entry -> (UInt32, Int)? in
             (entry[kCGWindowNumber as String] as? NSNumber).map { ($0.uint32Value, index) }

@@ -26,7 +26,18 @@ enum SwitcherIntegrationCheck {
         fixtureWindows[2].tabbingMode = .preferred; fixtureWindows[3].tabbingMode = .preferred
         fixtureWindows[2].tabbingIdentifier = prefix; fixtureWindows[3].tabbingIdentifier = prefix
         fixtureWindows[2].addTabbedWindow(fixtureWindows[3], ordered: .above)
+        let untitled = NSWindow(contentRect: CGRect(x: 200, y: 200, width: 317, height: 211),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        untitled.title = ""; untitled.tabbingMode = .disallowed
+        let panel = NSPanel(contentRect: CGRect(x: 240, y: 240, width: 720, height: 84),
+            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = "\(prefix) Auxiliary"; panel.level = .floating
+        let orderedOut = NSWindow(contentRect: CGRect(x: 200, y: 200, width: 400, height: 300),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        orderedOut.title = "\(prefix) Ordered out"; orderedOut.tabbingMode = .disallowed
+        fixtureWindows.append(contentsOf: [untitled, panel, orderedOut])
         fixtureWindows.forEach { $0.orderFront(nil) }
+        orderedOut.orderOut(nil)
         fixtureWindows[0].makeKeyAndOrderFront(nil)
         app.activate(ignoringOtherApps: true)
         app.run()
@@ -73,6 +84,30 @@ enum SwitcherIntegrationCheck {
             guard let a = inventory.first(where: { $0.info.title == "\(prefix) A" }),
                   let b = inventory.first(where: { $0.info.title == "\(prefix) B" }), let axA = a.element else { throw ArrangeError("Fixture windows were not enumerated") }
             print("PASS: multiple windows of the same app are enumerated")
+            let fixtureInventory = inventory.filter { $0.app.processIdentifier == child.processIdentifier }
+            guard fixtureInventory.contains(where: { !$0.info.windowless && $0.info.title.isEmpty }),
+                  !fixtureInventory.contains(where: { $0.info.title == "\(prefix) Auxiliary" }),
+                  !fixtureInventory.contains(where: { $0.info.title == "\(prefix) Ordered out" }) else {
+                throw ArrangeError("Untitled window / auxiliary panel / ordered-out surface eligibility mismatch")
+            }
+            print("PASS: untitled standard window is included; floating and ordered-out surfaces are excluded")
+            // Exercise the other-Space acquisition route against a known window
+            // without disturbing the user's current Space or needing a second one.
+            let resolved: Bool = await withCheckedContinuation { continuation in
+                let pid = child.processIdentifier, id = a.nativeID!
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let resolver = SwitcherAXWindowResolver(), spaces = NativeSpaces()
+                    for _ in 0..<10 {
+                        if let ax = resolver.resolve(pid: pid, session: prefix, ids: [id], spaces: spaces)[id],
+                           AX.string(ax, kAXTitleAttribute) == "\(prefix) A" {
+                            continuation.resume(returning: true); return
+                        }
+                    }
+                    continuation.resume(returning: false)
+                }
+            }
+            guard resolved else { throw ArrangeError("Could not acquire the fixture's AX window through its WindowServer ID") }
+            print("PASS: WindowServer ID resolves to a real AX window root")
             try await controller.integrationFocus(b)
             if !actionsOnly {
                 try await controller.integrationFocus(a)
@@ -138,7 +173,9 @@ enum SwitcherIntegrationCheck {
                 if !child.isRunning { break }
                 try await Task.sleep(for: .milliseconds(100))
             }
-            guard !child.isRunning, controller.isOpen else { throw ArrangeError("⌘Q did not terminate the selected fixture app") }
+            guard !child.isRunning, controller.isOpen else {
+                throw ArrangeError("⌘Q did not terminate the selected fixture app (running: \(child.isRunning), open: \(controller.isOpen), command: \(String(describing: controller.integrationLastCommand)))")
+            }
             print("PASS: ⌘Q requests normal termination of the selected app")
             controller.dismiss()
             if let failure { throw failure }

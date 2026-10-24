@@ -15,7 +15,7 @@ struct WindowSwitcherTests {
     @Test func defaultIncludesAllStatesAndPlacesWindowlessAtEnd() {
         #expect(ids(SwitcherSettings()) == ["a1", "a2", "b2", "b1", "c"])
     }
-    @Test(arguments: SwitcherSpaces.allCases) func untitledWindowsAreExcludedAcrossSpacesAndStates(_ spaces: SwitcherSpaces) {
+    @Test(arguments: SwitcherSpaces.allCases) func untitledDestinationsFollowSpaceAndStateSettings(_ spaces: SwitcherSpaces) {
         var settings = SwitcherSettings(); settings.spaces = spaces
         let candidates = [
             SwitcherWindow(id: "visible", title: "", spaces: [1]),
@@ -24,18 +24,40 @@ struct WindowSwitcherTests {
             SwitcherWindow(id: "hidden", title: "", spaces: [1], hidden: true),
             SwitcherWindow(id: "whitespace", title: " \t\n", spaces: [1])
         ]
-        #expect(SwitcherList.windows(candidates, settings: settings, context: context).isEmpty)
+        let ids = Set(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id))
+        switch spaces {
+        case .all: #expect(ids == ["visible", "other", "minimized", "hidden", "whitespace"])
+        case .visible: #expect(ids == ["visible", "minimized", "hidden", "whitespace"])
+        case .other: #expect(ids == ["other"])
+        }
+        settings.minimized = .hide; settings.hidden = .hide
+        let filtered = SwitcherList.windows(candidates, settings: settings, context: context).map(\.id)
+        #expect(!filtered.contains("minimized") && !filtered.contains("hidden"))
     }
-    @Test func untitledWindowDoesNotReplaceNamedAppRepresentativeAndReturnsWhenTitleIsAvailable() {
+    @Test func untitledWindowCanRepresentItsApp() {
         var settings = SwitcherSettings(); settings.onePerApp = true
-        var candidates = [
+        let candidates = [
             SwitcherWindow(id: "untitled", appID: "a", focused: 20),
             SwitcherWindow(id: "named", appID: "a", title: "Project", focused: 10),
             SwitcherWindow(id: "windowless", appID: "b", windowless: true)
         ]
-        #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["named", "windowless"])
-        candidates[0].title = "Recovered title"
         #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["untitled", "windowless"])
+    }
+    @Test(arguments: SwitcherSpaces.allCases) func windowlessAppsBypassSpaceAndDisplayFilters(_ spaces: SwitcherSpaces) {
+        var settings = SwitcherSettings(); settings.spaces = spaces; settings.screens = .switcher
+        #expect(ids(settings).contains("c"))
+        settings.windowless = .hide
+        #expect(!ids(settings).contains("c"))
+    }
+    @Test func hiddenWindowlessAppsStillRespectHiddenAndAppFilters() {
+        let app = SwitcherWindow(id: "app", appID: "a", hidden: true, windowless: true)
+        var settings = SwitcherSettings(); settings.hidden = .hide
+        #expect(SwitcherList.windows([app], settings: settings, context: context).isEmpty)
+        settings.hidden = .show; settings.apps = .other
+        #expect(SwitcherList.windows([app], settings: settings, context: context).isEmpty)
+        settings.apps = .underCursor
+        var cursor = context; cursor.cursorWindows = ["app"]
+        #expect(SwitcherList.windows([app], settings: settings, context: cursor).isEmpty)
     }
     @Test(arguments: SwitcherApps.allCases) func excludedAppsOverrideEveryApplicationFilter(_ filter: SwitcherApps) {
         var settings = SwitcherSettings(); settings.apps = filter
@@ -64,24 +86,26 @@ struct WindowSwitcherTests {
     }
     @Test func spacesIncludeStickyWindowsOnlyWhenTheirSpaceIsVisible() {
         var settings = SwitcherSettings(); settings.spaces = .visible
-        #expect(ids(settings) == ["a1", "b2", "b1"])
+        #expect(ids(settings) == ["a1", "b2", "b1", "c"])
         settings.spaces = .other
-        #expect(ids(settings) == ["a2"])
+        #expect(ids(settings) == ["a2", "c"])
     }
-    @Test func unknownSpaceIsNotMisclassifiedAsAnotherDesktop() {
+    @Test func nonVisibleSpacesMatchAltTabEvenWithoutKnownMembership() {
         var settings = SwitcherSettings(); settings.spaces = .other
         let unknown = SwitcherWindow(id: "unknown")
+        #expect(SwitcherList.windows([unknown], settings: settings, context: context).map(\.id) == ["unknown"])
+        settings.spaces = .visible
         #expect(SwitcherList.windows([unknown], settings: settings, context: context).isEmpty)
     }
     @Test func screenAndStateFiltersCompose() {
         var settings = SwitcherSettings(); settings.screens = .switcher; settings.hidden = .hide
-        #expect(ids(settings) == ["a1"])
+        #expect(ids(settings) == ["a1", "c"])
         settings.screens = .all; settings.minimized = .hide; settings.fullscreen = false; settings.windowless = .hide
         #expect(ids(settings) == ["a1"])
     }
     @Test func trailingStateTakesPrecedenceOverMostRecentAndNameOrder() {
         var settings = SwitcherSettings(); settings.minimized = .last; settings.hidden = .last
-        #expect(ids(settings) == ["a1", "b2", "c", "a2", "b1"])
+        #expect(ids(settings) == ["a1", "b2", "a2", "b1", "c"])
         settings.order = .alphabetical
         #expect(ids(settings) == ["a1", "b2", "a2", "b1", "c"])
     }
@@ -105,7 +129,7 @@ struct WindowSwitcherTests {
         settings.separateTabs = true
         #expect(SwitcherList.windows(candidates, settings: settings, context: context).count == 5)
         settings.separateTabs = false; settings.spaces = .other
-        #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["a2"])
+        #expect(SwitcherList.windows(candidates, settings: settings, context: context).map(\.id) == ["a2", "c"])
     }
     @Test func selectionStartsAfterCurrentAndWrapsBothWays() {
         var selection = SwitcherSelection()
