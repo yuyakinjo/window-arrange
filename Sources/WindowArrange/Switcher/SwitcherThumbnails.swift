@@ -9,6 +9,10 @@ final class SwitcherThumbnails: ObservableObject {
     private var task: Task<Void, Never>?
     private var generation = 0
 
+    #if DEBUG
+    func integrationSetPreviewImages(_ images: [String: NSImage]) { self.images = images }
+    #endif
+
     func requestPermission() {
         // Only an explicit settings button may request capture access.
         CGRequestScreenCaptureAccess()
