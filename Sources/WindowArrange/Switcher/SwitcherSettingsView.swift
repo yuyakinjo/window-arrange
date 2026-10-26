@@ -79,6 +79,7 @@ struct SwitcherSettingsView: View {
             }
             Section("表示") {
                 choice("表示形式", \.style)
+                choice("形状", \.shape)
                 choice("アイコン＋タイトルの位置", \.titlePosition)
                 choice("テーマ", \.theme)
                 LabeledContent("切替画面のサイズ") {
@@ -183,7 +184,8 @@ private struct SwitcherSettingsPreview: View {
                         ForEach(controller.previewWindows, id: \.info.id) { window in
                             VStack(alignment: .leading, spacing: 4) {
                                 SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
-                                                   style: controller.settings.style, titlePosition: controller.settings.titlePosition, compact: true,
+                                                   style: controller.settings.style, titlePosition: controller.settings.titlePosition,
+                                                   shape: controller.settings.shape, compact: true,
                                                    scale: controller.settings.effectiveWindowScale)
                                     .overlay(alignment: .topTrailing) {
                                         Button { onExclude(window.info) } label: {
@@ -205,7 +207,13 @@ private struct SwitcherSettingsPreview: View {
                             }
                             .accessibilityElement(children: .contain)
                         }
-                    }.padding(3)
+                    }
+                    .padding(controller.settings.shape == .circle ? 8 : 3)
+                    .background {
+                        if controller.settings.shape == .circle {
+                            RoundedRectangle(cornerRadius: 44).fill(.primary.opacity(0.04))
+                        }
+                    }
                 }
             }
             if let name = controller.previewAppName {

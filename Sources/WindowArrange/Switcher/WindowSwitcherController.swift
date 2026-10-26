@@ -237,7 +237,7 @@ final class WindowSwitcherController: ObservableObject {
     private func resizePanel(on screen: NSScreen) {
         guard let panel else { return }
         let layout = SwitcherLayout(windowCount: windows.count, maximumWidth: screen.visibleFrame.width - 40,
-                                    requestedScale: settings.effectiveWindowScale)
+                                    requestedScale: settings.effectiveWindowScale, shape: settings.shape, style: settings.style)
         let width = layout.width
         let view: NSHostingView<SwitcherOverlay>
         if let existing = panel.contentView as? NSHostingView<SwitcherOverlay> {
@@ -370,8 +370,12 @@ final class WindowSwitcherController: ObservableObject {
         try await focus(target, generation: session, request: focusRequest)
     }
     static func integrationPreview() throws {
+        for shape in SwitcherShape.allCases { try integrationPreview(shape: shape) }
+    }
+    private static func integrationPreview(shape: SwitcherShape) throws {
         let controller = WindowSwitcherController()
         let app = NSRunningApplication.current
+        controller.settings.shape = shape
         controller.selectedID = "preview-1"
         for style in SwitcherStyle.allCases {
             controller.settings.style = style
@@ -381,12 +385,28 @@ final class WindowSwitcherController: ObservableObject {
                     controller.settings.theme = theme
                     for count in [0, 1, 2, 3, 4, 5, 8, 9, 20] {
                         for scale in [0.7, 1.0, 1.5] {
-                            let titles = ["作業メモ", "プロジェクト", "ターミナル"]
+                            let titles = ["作業メモ — window-arrange — 長いウィンドウタイトルの表示確認", "プロジェクト", "ターミナル"]
                             controller.windows = (0..<count).map { index in
                                 TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ",
                                     title: index < titles.count ? titles[index] : "ウィンドウ \(index + 1)"), app: app, nativeID: nil, element: nil)
                             }
-                            let layout = SwitcherLayout(windowCount: count, maximumWidth: 1600, requestedScale: scale)
+                            controller.thumbnails.integrationSetPreviewImages(Dictionary(uniqueKeysWithValues: controller.windows.map { window in
+                                let image = NSImage(size: NSSize(width: 540, height: 340), flipped: false) { rect in
+                                    NSColor.windowBackgroundColor.setFill(); rect.fill()
+                                    NSColor.controlAccentColor.withAlphaComponent(0.2).setFill()
+                                    NSRect(x: 0, y: 0, width: 140, height: 300).fill()
+                                    for row in 0..<7 {
+                                        NSColor.secondaryLabelColor.withAlphaComponent(0.25).setFill()
+                                        NSRect(x: 165, y: 255 - row * 32, width: row % 2 == 0 ? 300 : 220, height: 10).fill()
+                                    }
+                                    (window.info.title as NSString).draw(at: NSPoint(x: 165, y: 300),
+                                        withAttributes: [.font: NSFont.systemFont(ofSize: 18), .foregroundColor: NSColor.labelColor])
+                                    return true
+                                }
+                                return (window.info.id, image)
+                            }))
+                            let layout = SwitcherLayout(windowCount: count, maximumWidth: 1600, requestedScale: scale,
+                                                        shape: shape, style: style)
                             let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
                             let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(620 * layout.scale, view.fittingSize.height))
                             let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -396,7 +416,7 @@ final class WindowSwitcherController: ObservableObject {
                             guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
                             view.cacheDisplay(in: view.bounds, to: bitmap)
                             guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
-                            let suffix = (position == .bottom ? "" : "-top") + (count == 3 ? "" : "-\(count)") + (scale == 1 ? "" : "-\(Int((scale * 100).rounded()))pct")
+                            let suffix = (shape == .roundedRectangle ? "" : "-circle") + (position == .bottom ? "" : "-top") + (count == 3 ? "" : "-\(count)") + (scale == 1 ? "" : "-\(Int((scale * 100).rounded()))pct")
                             try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-\(style.rawValue)-\(theme.rawValue)\(suffix).png"))
                         }
                     }
@@ -436,23 +456,31 @@ struct SwitcherLayout {
     let windowCount: Int
     let maximumWidth: CGFloat
     var requestedScale: CGFloat = 1
+    var shape: SwitcherShape = .roundedRectangle
+    var style: SwitcherStyle = .thumbnails
     let spacing: CGFloat = 12
     let outerPadding: CGFloat = 22
+    // Keep captions inside the curved ends when circular tiles are packed closely.
+    var horizontalPadding: CGFloat { shape == .circle ? 64 : outerPadding }
     let borderPadding: CGFloat = 1
     let gridPadding: CGFloat = 4
     private static let maximumColumns = 4
 
     static func columnCount(for windowCount: Int) -> Int { min(maximumColumns, max(1, windowCount)) }
     var columns: Int { Self.columnCount(for: windowCount) }
-    private var insets: CGFloat { 2 * (outerPadding + borderPadding + gridPadding) }
-    private var baseTileWidth: CGFloat { (1000 - insets - CGFloat(Self.maximumColumns - 1) * spacing) / CGFloat(Self.maximumColumns) }
+    private var insets: CGFloat { 2 * (horizontalPadding + borderPadding + gridPadding) }
+    private var fixedTileWidth: CGFloat { shape == .circle ? 20 : 0 }
+    private var baseTileWidth: CGFloat {
+        shape == .circle ? (style == .thumbnails ? 125 : 95)
+            : (1000 - insets - CGFloat(Self.maximumColumns - 1) * spacing) / CGFloat(Self.maximumColumns)
+    }
     var scale: CGFloat {
         let requested = requestedScale.isFinite ? min(1.5, max(0.7, requestedScale)) : 1
         let available = (maximumWidth - insets - CGFloat(columns - 1) * spacing) / CGFloat(columns)
-        return max(0.1, min(requested, available / baseTileWidth))
+        return max(0.1, min(requested, (available - fixedTileWidth) / baseTileWidth))
     }
     var width: CGFloat {
-        insets + CGFloat(columns) * baseTileWidth * scale + CGFloat(columns - 1) * spacing
+        insets + CGFloat(columns) * (baseTileWidth * scale + fixedTileWidth) + CGFloat(columns - 1) * spacing
     }
 }
 
@@ -462,7 +490,14 @@ private struct SwitcherOverlay: View {
     let layout: SwitcherLayout
     private var columns: Int { layout.columns }
     private var spacing: CGFloat { layout.spacing }
-    private var tileHeight: CGFloat { (controller.settings.style == .thumbnails ? 125 : 95) * layout.scale + 65 }
+    private var tileHeight: CGFloat {
+        (controller.settings.style == .thumbnails ? 125 : 95) * layout.scale + (controller.settings.shape == .circle ? 75 : 65)
+    }
+    private var containerShape: RoundedRectangle {
+        // A single row forms a pill; multiple rows keep the same rounded ends
+        // without cutting into the first and last columns.
+        RoundedRectangle(cornerRadius: controller.settings.shape == .circle ? tileHeight / 2 + layout.outerPadding : 20)
+    }
     private var gridHeight: CGFloat {
         let rows = max(1, (controller.windows.count + columns - 1) / columns)
         return CGFloat(rows) * tileHeight + CGFloat(rows - 1) * spacing + 8
@@ -494,8 +529,9 @@ private struct SwitcherOverlay: View {
             }
             if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }
-        .padding(layout.outerPadding).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(.primary.opacity(0.12)))
+        .padding(.vertical, layout.outerPadding).padding(.horizontal, layout.horizontalPadding)
+        .background(.regularMaterial, in: containerShape)
+        .overlay(containerShape.stroke(.primary.opacity(0.12)))
         .padding(layout.borderPadding)
         .frame(width: layout.width)
         .preferredColorScheme(controller.settings.theme == .system ? nil : controller.settings.theme == .dark ? .dark : .light)
@@ -505,7 +541,7 @@ private struct SwitcherOverlay: View {
         return Button { controller.choose(window.info.id) } label: {
             SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
                                style: controller.settings.style, titlePosition: controller.settings.titlePosition,
-                               selected: selected, scale: layout.scale)
+                               shape: controller.settings.shape, selected: selected, scale: layout.scale)
         }.buttonStyle(.plain)
             .accessibilityLabel("\(window.info.appName)、\(window.info.title)")
             .accessibilityAddTraits(selected ? [.isSelected] : [])
@@ -517,6 +553,7 @@ struct SwitcherWindowTile: View {
     let image: NSImage?
     let style: SwitcherStyle
     let titlePosition: SwitcherTitlePosition
+    var shape: SwitcherShape = .roundedRectangle
     var selected = false
     var compact = false
     var scale: CGFloat = 1
@@ -524,22 +561,59 @@ struct SwitcherWindowTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if titlePosition == .top { titleLabel }
+            if titlePosition == .top { title }
             thumbnail
-            if titlePosition == .bottom { titleLabel }
-        }.padding(10).frame(height: imageHeight + 65)
-            .background(selected ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1))
+            if titlePosition == .bottom { title }
+        }.padding(.vertical, 10).padding(.horizontal, shape == .circle ? 0 : 10)
+            .frame(height: imageHeight + (shape == .circle ? 75 : 65))
+            .background(selected && shape == .roundedRectangle ? Color.accentColor.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                if shape == .roundedRectangle {
+                    RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : .primary.opacity(0.08), lineWidth: selected ? 2 : 1)
+                }
+            }
             .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    @ViewBuilder
     private var thumbnail: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(.primary.opacity(0.04))
-            if style == .thumbnails, let image = image {
-                Image(nsImage: image).resizable().scaledToFit().padding(4)
-            } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(compact ? 12 : 24) }
-        }.frame(height: imageHeight)
+        if shape == .circle {
+            ZStack {
+                Circle().fill(.primary.opacity(0.04))
+                if style == .thumbnails, let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!)
+                        .resizable().scaledToFit().padding(compact ? 12 : 24)
+                }
+            }
+            .frame(width: imageHeight, height: imageHeight)
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(selected ? Color.accentColor : .primary.opacity(0.12), lineWidth: selected ? 3 : 1))
+            .frame(maxWidth: .infinity)
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8).fill(.primary.opacity(0.04))
+                if style == .thumbnails, let image = image {
+                    Image(nsImage: image).resizable().scaledToFit().padding(4)
+                } else { Image(nsImage: window.app.icon ?? NSImage(named: NSImage.applicationIconName)!).resizable().scaledToFit().padding(compact ? 12 : 24) }
+            }.frame(height: imageHeight)
+        }
+    }
+
+    @ViewBuilder
+    private var title: some View {
+        if shape == .circle {
+            titleLabel.padding(.horizontal, 12).padding(.vertical, 5)
+                // Leave room for the outer pill's curved ends, even with long titles.
+                .frame(maxWidth: imageHeight + 20)
+                .background(selected ? Color.accentColor.opacity(0.17) : .primary.opacity(0.04), in: Capsule())
+                .overlay(Capsule().strokeBorder(selected ? Color.accentColor : .primary.opacity(0.08)))
+                .help(window.info.title.isEmpty ? window.info.appName : "\(window.info.title)\n\(window.info.appName)")
+                .frame(maxWidth: .infinity)
+        } else {
+            titleLabel
+        }
     }
 
     private var titleLabel: some View {

@@ -39,6 +39,10 @@ public enum SwitcherStyle: String, SwitcherChoice {
     case thumbnails, icons
     public var title: String { self == .thumbnails ? "サムネイル" : "アプリアイコン" }
 }
+public enum SwitcherShape: String, SwitcherChoice {
+    case roundedRectangle, circle
+    public var title: String { self == .roundedRectangle ? "角丸" : "丸形（ピル型）" }
+}
 public enum SwitcherTitlePosition: String, SwitcherChoice {
     case top, bottom
     public var title: String { self == .top ? "上" : "下" }
@@ -96,6 +100,7 @@ public struct SwitcherSettings: Codable, Equatable {
     public var onePerApp = false
     public var separateTabs = false
     public var style: SwitcherStyle = .thumbnails
+    public var shape: SwitcherShape = .roundedRectangle
     public var titlePosition: SwitcherTitlePosition = .bottom
     public var theme: SwitcherTheme = .system
     public static let windowScaleRange = 0.7...1.5
@@ -114,7 +119,7 @@ public struct SwitcherSettings: Codable, Equatable {
     public init() {}
     private enum CodingKeys: String, CodingKey {
         case enabled, apps, spaces, screens, minimized, hidden, fullscreen, windowless, order, onePerApp, separateTabs
-        case style, titlePosition, theme, windowScale, release, summon, next, previous, confirm, cancel, closeWindow, quitApp, excludedApps
+        case style, shape, titlePosition, theme, windowScale, release, summon, next, previous, confirm, cancel, closeWindow, quitApp, excludedApps
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -131,6 +136,7 @@ public struct SwitcherSettings: Codable, Equatable {
         onePerApp = try values.decode(Bool.self, forKey: .onePerApp)
         separateTabs = try values.decode(Bool.self, forKey: .separateTabs)
         style = try values.decode(SwitcherStyle.self, forKey: .style)
+        shape = try values.decodeIfPresent(SwitcherShape.self, forKey: .shape) ?? .roundedRectangle
         titlePosition = try values.decodeIfPresent(SwitcherTitlePosition.self, forKey: .titlePosition) ?? .bottom
         theme = try values.decode(SwitcherTheme.self, forKey: .theme)
         windowScale = try values.decodeIfPresent(Double.self, forKey: .windowScale) ?? 1
