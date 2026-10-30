@@ -5,6 +5,12 @@ import SwiftUI
 import ArrangementCore
 import OSLog
 
+enum HeadMotionMode: String, CaseIterable {
+    case turn, tilt
+
+    var title: String { self == .turn ? "素早く左右を向く" : "左右に傾ける" }
+}
+
 @MainActor
 final class HeadMotionController: ObservableObject {
     @Published private(set) var monitoring = false
@@ -15,18 +21,33 @@ final class HeadMotionController: ObservableObject {
     @Published private(set) var status = "AirPodsをMacに接続して、装着してください。"
     @Published private(set) var lastAction = "まだ操作していません"
     @Published private(set) var gestureStatus = "切り替えはオフです"
+    @Published var mode: HeadMotionMode {
+        didSet {
+            defaults.set(mode.rawValue, forKey: "headMotionMode")
+            invalidatePose()
+            if receiving { status = "操作方法を変更しました。画面を正面に見て、正面を登録し直してください。" }
+        }
+    }
+    @Published var turnThreshold: Double {
+        didSet { defaults.set(turnThreshold, forKey: "headTurnThreshold"); resetGestures() }
+    }
+    @Published var turnSpeed: Double {
+        didSet { defaults.set(turnSpeed, forKey: "headTurnSpeed"); resetGestures() }
+    }
     @Published var threshold: Double {
-        didSet { defaults.set(threshold, forKey: "headTiltThreshold"); gesture.reset() }
+        didSet { defaults.set(threshold, forKey: "headTiltThreshold"); resetGestures() }
     }
     @Published var reversed: Bool {
-        didSet { defaults.set(reversed, forKey: "headTiltReversed"); gesture.reset() }
+        didSet { defaults.set(reversed, forKey: "headTiltReversed"); resetGestures() }
     }
     var isBusy: () -> Bool = { false }
     private let defaults: UserDefaults
     private let manager = CMHeadphoneMotionManager()
     private var gesture = HeadTiltGesture()
+    private var turnGesture = HeadTurnGesture()
     private var neutral: Double?
     private var latestRoll: Double?
+    private var latestYaw: Double?
     private var latestArrival: TimeInterval?
     private var latestSensorTime: TimeInterval?
     private var lastDisplayTime: TimeInterval = 0
@@ -38,11 +59,16 @@ final class HeadMotionController: ObservableObject {
 
     func setMenuTracking(_ tracking: Bool) {
         menuTracking = tracking
-        gesture.reset()
+        resetGestures()
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        mode = HeadMotionMode(rawValue: defaults.string(forKey: "headMotionMode") ?? "") ?? .turn
+        let savedTurn = defaults.double(forKey: "headTurnThreshold")
+        turnThreshold = savedTurn.isFinite && (10...40).contains(savedTurn) ? savedTurn : 18
+        let savedSpeed = defaults.double(forKey: "headTurnSpeed")
+        turnSpeed = savedSpeed.isFinite && (40...200).contains(savedSpeed) ? savedSpeed : 90
         let saved = defaults.double(forKey: "headTiltThreshold")
         threshold = saved.isFinite && (10...40).contains(saved) ? saved : 20
         reversed = defaults.bool(forKey: "headTiltReversed")
@@ -84,7 +110,7 @@ final class HeadMotionController: ObservableObject {
                     self.stop()
                     self.status = "モーションを取得できませんでした：\(error.localizedDescription)"
                 } else if let motion {
-                    self.receive(roll: motion.attitude.roll, timestamp: motion.timestamp)
+                    self.receive(roll: motion.attitude.roll, yaw: motion.attitude.yaw, timestamp: motion.timestamp)
                 }
             }
         }
@@ -114,22 +140,23 @@ final class HeadMotionController: ObservableObject {
         latestArrival = nil
         latestSensorTime = nil
         latestRoll = nil
+        latestYaw = nil
         invalidatePose()
-        status = "停止中です。「接続を開始」で傾きを確認できます。"
+        status = "停止中です。「接続を開始」で頭の動きを確認できます。"
     }
 
     func calibrate() {
-        guard freshSample, let latestRoll else { return }
-        neutral = latestRoll
+        guard freshSample, let angle = mode == .turn ? latestYaw : latestRoll else { return }
+        neutral = angle
         calibrated = true
         degrees = 0
         enabled = false
-        gesture.reset()
+        resetGestures()
         status = "正面を登録しました。デスクトップ切り替えを有効にできます。"
     }
 
     func setEnabled(_ value: Bool) {
-        gesture.reset()
+        resetGestures()
         if value {
             guard calibrated, freshSample else {
                 enabled = false
@@ -143,7 +170,7 @@ final class HeadMotionController: ObservableObject {
             }
         }
         enabled = value
-        gestureStatus = value ? "正面に戻してから傾けてください" : "切り替えはオフです"
+        gestureStatus = value ? "正面に戻してから操作してください" : "切り替えはオフです"
     }
 
     func testSwitch(_ direction: HeadTiltDirection) {
@@ -160,12 +187,17 @@ final class HeadMotionController: ObservableObject {
         calibrated = false
         neutral = nil
         degrees = 0
-        gesture.reset()
+        resetGestures()
         gestureStatus = "切り替えはオフです"
     }
 
-    private func receive(roll: Double, timestamp: TimeInterval) {
-        guard roll.isFinite, timestamp.isFinite else { return }
+    private func resetGestures() {
+        gesture.reset()
+        turnGesture.reset()
+    }
+
+    private func receive(roll: Double, yaw: Double, timestamp: TimeInterval) {
+        guard roll.isFinite, yaw.isFinite, timestamp.isFinite else { invalidatePose(); return }
         let now = ProcessInfo.processInfo.systemUptime
         if !loggedFirstSample {
             loggedFirstSample = true
@@ -181,18 +213,22 @@ final class HeadMotionController: ObservableObject {
         }
         let wasReceiving = receiving
         latestRoll = roll
+        latestYaw = yaw
         latestArrival = now
         latestSensorTime = timestamp
         receiving = true
-        if !wasReceiving { status = "傾きを受信しています。画面を正面に見て「今の姿勢を正面にする」を押してください。" }
-        let angle = HeadTiltGesture.relativeDegrees(angle: roll, neutral: neutral ?? 0) * (reversed ? -1 : 1)
+        if !wasReceiving { status = "頭の動きを受信しています。画面を正面に見て「今の姿勢を正面にする」を押してください。" }
+        // Positive yaw is a left turn; normalize both modes to negative = left.
+        let sourceAngle = mode == .turn ? yaw : roll
+        let directionSign: Double = mode == .turn ? -1 : 1
+        let angle = HeadTiltGesture.relativeDegrees(angle: sourceAngle, neutral: neutral ?? 0) * directionSign * (reversed ? -1 : 1)
         if now - lastDisplayTime >= 0.1 {
             degrees = angle
             lastDisplayTime = now
         }
         guard enabled, calibrated else { return }
         guard !menuTracking else {
-            gesture.reset()
+            resetGestures()
             updateGestureStatus("メニューを閉じると操作を再開します")
             return
         }
@@ -202,13 +238,26 @@ final class HeadMotionController: ObservableObject {
             return
         }
         guard !isBusy() else {
-            gesture.reset()
+            resetGestures()
             updateGestureStatus("ほかのウィンドウ操作が終わるのを待っています")
             return
         }
         guard SpaceSwitchEvents.heldModifiers.isEmpty else {
-            gesture.reset()
+            resetGestures()
             updateGestureStatus("キーボードの修飾キーを離してください")
+            return
+        }
+        if mode == .turn {
+            turnGesture.threshold = turnThreshold
+            turnGesture.speedThreshold = turnSpeed
+            if let direction = turnGesture.update(degrees: angle, time: timestamp) { postSwitch(direction) }
+            switch turnGesture.phase {
+            case .waitingForNeutral:
+                updateGestureStatus(String(format: "正面に戻してください（±%.1f°以内）", turnGesture.neutralTolerance))
+            case .coolingDown: updateGestureStatus("次の操作まで少し待っています")
+            case .ready: updateGestureStatus("次の操作が可能です。素早く左右を向いてください")
+            case .turning: updateGestureStatus("左右を向く動きを確認しています")
+            }
             return
         }
         gesture.threshold = threshold
