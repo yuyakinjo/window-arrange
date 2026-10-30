@@ -34,6 +34,12 @@ final class HeadMotionController: ObservableObject {
     private var sleepObserver: NSObjectProtocol?
     private var session = UUID()
     private var loggedFirstSample = false
+    private var menuTracking = false
+
+    func setMenuTracking(_ tracking: Bool) {
+        menuTracking = tracking
+        gesture.reset()
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -185,6 +191,11 @@ final class HeadMotionController: ObservableObject {
             lastDisplayTime = now
         }
         guard enabled, calibrated else { return }
+        guard !menuTracking else {
+            gesture.reset()
+            updateGestureStatus("メニューを閉じると操作を再開します")
+            return
+        }
         guard AXIsProcessTrusted() else {
             setEnabled(false)
             status = "アクセシビリティの許可が解除されたため、切り替えを停止しました。"

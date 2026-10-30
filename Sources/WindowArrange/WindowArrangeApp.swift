@@ -5,9 +5,10 @@ import ArrangementCore
 import Darwin
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let model = AppModel()
     private var mainWindow: NSWindow?
+    private var statusMenu: StatusMenuController?
     #if DEBUG
     private var developmentTermination: DispatchSourceSignal?
     #endif
@@ -15,12 +16,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Also stay out of the Dock when launched directly with `swift run`.
         NSApp.setActivationPolicy(.accessory)
+        installApplicationMenu()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow()
+        return false
+    }
+
+    private func installApplicationMenu() {
+        let main = NSMenu()
+        func submenu(_ title: String) -> NSMenu {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            item.submenu = menu
+            main.addItem(item)
+            return menu
+        }
+        let app = submenu("Window Arrange")
+        let settings = NSMenuItem(title: "設定…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        app.addItem(settings)
+        app.addItem(.separator())
+        app.addItem(withTitle: "Window Arrangeを終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let file = submenu("ファイル")
+        let capture = NSMenuItem(title: "Snapshotを保存", action: #selector(captureSnapshot), keyEquivalent: "")
+        capture.target = self
+        file.addItem(capture)
+        file.addItem(withTitle: "閉じる", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let edit = submenu("編集")
+        for (title, selector, key) in [("取り消す", "undo:", "z"), ("やり直す", "redo:", "Z"),
+                                       ("カット", "cut:", "x"), ("コピー", "copy:", "c"),
+                                       ("ペースト", "paste:", "v"), ("すべてを選択", "selectAll:", "a")] {
+            edit.addItem(withTitle: title, action: Selector(selector), keyEquivalent: key)
+        }
+        let window = submenu("ウインドウ")
+        window.addItem(withTitle: "しまう", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: "拡大／縮小", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        NSApp.mainMenu = main
+        NSApp.windowsMenu = window
+    }
+
+    @objc private func openSettings() { model.section = "settings"; showMainWindow() }
+    @objc private func captureSnapshot() { Task { await model.capture() } }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action != #selector(captureSnapshot) || !model.busy
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.openMainWindow = { [weak self] in self?.showMainWindow() }
+        statusMenu = StatusMenuController(state: { [weak self] in
+            guard let model = self?.model else { return StatusMenuState() }
+            return StatusMenuState(busy: model.busy, switcherEnabled: model.data.switcher.enabled,
+                selected: model.selected, snapshots: model.data.snapshots,
+                motionMonitoring: model.headMotion.monitoring, motionEnabled: model.headMotion.enabled,
+                motionReady: model.headMotion.receiving && model.headMotion.calibrated)
+        }, perform: { [weak self] action in self?.performMenuAction(action) },
+           trackingChanged: { [weak self] tracking in self?.model.headMotion.setMenuTracking(tracking) })
         model.switcher.start()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
@@ -42,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         model.switcher.stop()
         model.headMotion.stop()
+        statusMenu?.stop()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             UserDefaults.standard.set(model.section, forKey: "developmentSection")
@@ -76,6 +131,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if mainWindow?.isMiniaturized == true { mainWindow?.deminiaturize(nil) }
         mainWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func performMenuAction(_ action: StatusMenuAction) {
+        switch action {
+        case .openWindow: showMainWindow()
+        case .switchWindows: model.switcher.show()
+        case .openAirPods: model.section = "airpods"; showMainWindow()
+        case .toggleMotion: model.headMotion.setEnabled(!model.headMotion.enabled)
+        case .stopMotion: model.headMotion.stop()
+        case .capture: Task { await model.capture() }
+        case .restore(let id):
+            if let snapshot = model.data.snapshots.first(where: { $0.id == id }) {
+                Task { await model.restore(snapshot) }
+            }
+        case .select(let id): model.select(id)
+        case .quit: NSApp.terminate(nil)
+        }
     }
 }
 
@@ -167,59 +239,13 @@ struct Launcher {
     }
 }
 
-struct WindowArrangeApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    var body: some Scene {
-        MenuBarExtra("Window Arrange", systemImage: "rectangle.3.group") {
-            MenuContent(openMainWindow: delegate.showMainWindow).environmentObject(delegate.model)
-        }
-        .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("Snapshotを保存") { Task { await delegate.model.capture() } }.disabled(delegate.model.busy)
-            }
-        }
-    }
-}
-
-private struct MenuContent: View {
-    @EnvironmentObject var model: AppModel
-    let openMainWindow: () -> Void
-    var body: some View {
-        Button("Window Arrangeを開く", action: openMainWindow)
-        Button("ウィンドウを切り替える") { model.switcher.show() }.disabled(!model.data.switcher.enabled)
-        HeadMotionMenu(controller: model.headMotion) {
-            model.section = "airpods"
-            openMainWindow()
-        }
-        Divider()
-        Button("Snapshotを保存") { Task { await model.capture() } }.disabled(model.busy)
-        if let snapshot = model.selected {
-            Button("「\(snapshot.name)」を復元") { Task { await model.restore(snapshot) } }.disabled(model.busy)
-        }
-        if !model.data.snapshots.isEmpty {
-            Menu("Snapshotを選択") {
-                ForEach(model.data.snapshots) { snapshot in
-                    Button(snapshot.name) { model.select(snapshot.id) }
-                }
-            }
-        }
-        Divider()
-        Button("終了") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
-}
-
-private struct HeadMotionMenu: View {
-    @ObservedObject var controller: HeadMotionController
-    let openSettings: () -> Void
-    var body: some View {
-        Menu("AirPods操作") {
-            Button("AirPods操作の設定", action: openSettings)
-            Toggle("デスクトップ切り替え", isOn: Binding(
-                get: { controller.enabled }, set: { controller.setEnabled($0) }
-            )).disabled(!controller.calibrated || !controller.receiving)
-            if controller.monitoring {
-                Button("AirPodsの接続を停止") { controller.stop() }
-            }
-        }
+enum WindowArrangeApp {
+    @MainActor static func main() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.delegate = delegate
+        // NSHostingView renders the existing management window; no extra SwiftUI
+        // Settings scene is needed to keep the status-item app alive.
+        withExtendedLifetime(delegate) { application.run() }
     }
 }
