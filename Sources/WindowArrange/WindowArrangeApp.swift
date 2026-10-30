@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             termination.resume()
             developmentTermination = termination
             if let section = UserDefaults.standard.string(forKey: "developmentSection"),
-               ["snapshots", "shortcuts", "switcher", "settings"].contains(section) {
+               ["snapshots", "shortcuts", "switcher", "airpods", "settings"].contains(section) {
                 model.section = section
             }
             showMainWindow()
@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         model.switcher.stop()
+        model.headMotion.stop()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             UserDefaults.standard.set(model.section, forKey: "developmentSection")
@@ -149,6 +150,9 @@ struct Launcher {
                 "accessibilityTrusted": AXIsProcessTrusted(),
                 "spacesSymbolsAvailable": spaces.available,
                 "normalSpacesDetected": (try? spaces.spaces().count) ?? 0,
+                "activeSpaceIndexes": (try? spaces.activeSpaces(includeFullscreen: true).map { $0.record.index }) ?? [],
+                "physicalModifierFlags": SpaceSwitchEvents.heldModifiers.rawValue,
+                "sessionModifierFlags": CGEventSource.flagsState(.combinedSessionState).rawValue,
                 "externalDependencies": 0
             ]
             if let json = try? JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys]),
@@ -183,6 +187,10 @@ private struct MenuContent: View {
     var body: some View {
         Button("Window Arrangeを開く", action: openMainWindow)
         Button("ウィンドウを切り替える") { model.switcher.show() }.disabled(!model.data.switcher.enabled)
+        HeadMotionMenu(controller: model.headMotion) {
+            model.section = "airpods"
+            openMainWindow()
+        }
         Divider()
         Button("Snapshotを保存") { Task { await model.capture() } }.disabled(model.busy)
         if let snapshot = model.selected {
@@ -197,5 +205,21 @@ private struct MenuContent: View {
         }
         Divider()
         Button("終了") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+}
+
+private struct HeadMotionMenu: View {
+    @ObservedObject var controller: HeadMotionController
+    let openSettings: () -> Void
+    var body: some View {
+        Menu("AirPods操作") {
+            Button("AirPods操作の設定", action: openSettings)
+            Toggle("デスクトップ切り替え", isOn: Binding(
+                get: { controller.enabled }, set: { controller.setEnabled($0) }
+            )).disabled(!controller.calibrated || !controller.receiving)
+            if controller.monitoring {
+                Button("AirPodsの接続を停止") { controller.stop() }
+            }
+        }
     }
 }

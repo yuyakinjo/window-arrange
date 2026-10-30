@@ -32,6 +32,7 @@ final class AppModel: ObservableObject {
     let nativeSpaces = NativeSpaces()
     let switcher = WindowSwitcherController()
     let loginItem = LoginItemController()
+    let headMotion = HeadMotionController()
     private let hotKeys = HotKeyManager()
     private let store: DataStore
     private var timer: Timer?
@@ -53,6 +54,9 @@ final class AppModel: ObservableObject {
         switcher.onError = { [weak self] error in self?.show(error); self?.openMainWindow?() }
         switcher.requestAccessibility = { [weak self] in self?.accessibility.requestAccess() }
         switcher.isBusy = { [weak self] in self?.busy == true || self?.recording != nil }
+        headMotion.isBusy = { [weak self] in
+            self?.busy == true || self?.recording != nil || self?.switcher.isOpen == true
+        }
         resumeHotKeys()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in

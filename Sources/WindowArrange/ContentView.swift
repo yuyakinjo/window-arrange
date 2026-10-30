@@ -18,6 +18,7 @@ struct ContentView: View {
                 if !model.trusted { permissionBanner }
                 if model.section == "switcher" { SwitcherSettingsView(controller: model.switcher, thumbnails: model.switcher.thumbnails) }
                 else if model.section == "shortcuts" { ShortcutsView() }
+                else if model.section == "airpods" { HeadMotionSettingsView(controller: model.headMotion) }
                 else if model.section == "settings" { SettingsView() }
                 else { SnapshotsView() }
                 Divider()
@@ -73,6 +74,7 @@ struct ContentView: View {
             nav("snapshots", "Snapshots", "square.stack.3d.up", count: model.data.snapshots.count)
             nav("switcher", "ウィンドウ切替", "rectangle.on.rectangle")
             nav("shortcuts", "ショートカット", "command")
+            nav("airpods", "AirPods操作", "airpodspro")
             nav("settings", "設定", "slider.horizontal.3")
             Spacer()
             #if DEBUG
@@ -100,8 +102,8 @@ struct ContentView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 5) {
-                Text(model.section == "snapshots" ? "Snapshots" : model.section == "shortcuts" ? "ショートカット" : model.section == "switcher" ? "ウィンドウ切替" : "設定").font(.system(size: 27, weight: .bold))
-                Text(model.section == "snapshots" ? "作業環境を記録して、好きなときに呼び戻す。" : model.section == "shortcuts" ? "指先から、ウィンドウを思いどおりに。" : model.section == "switcher" ? "使いたいウィンドウへ、すばやく。" : "自分のMacに合わせて、使いやすく。").font(.callout).foregroundStyle(.secondary)
+                Text(model.section == "snapshots" ? "Snapshots" : model.section == "shortcuts" ? "ショートカット" : model.section == "switcher" ? "ウィンドウ切替" : model.section == "airpods" ? "AirPods操作" : "設定").font(.system(size: 27, weight: .bold))
+                Text(model.section == "snapshots" ? "作業環境を記録して、好きなときに呼び戻す。" : model.section == "shortcuts" ? "指先から、ウィンドウを思いどおりに。" : model.section == "switcher" ? "使いたいウィンドウへ、すばやく。" : model.section == "airpods" ? "頭を傾けて、隣のデスクトップへ。" : "自分のMacに合わせて、使いやすく。").font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
             Button { Task { await model.capture() } } label: { Label("Snapshotを保存", systemImage: "plus") }
