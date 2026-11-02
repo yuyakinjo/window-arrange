@@ -84,7 +84,8 @@ final class AccessibilityService {
             func convert(_ rect: CGRect) -> CGRect {
                 CGRect(x: rect.minX, y: primaryTop - rect.maxY, width: rect.width, height: rect.height)
             }
-            return DisplayRecord(id: id, name: screen.localizedName, frame: convert(screen.frame), visibleFrame: convert(screen.visibleFrame))
+            return DisplayRecord(id: id, name: screen.localizedName, frame: convert(screen.frame), visibleFrame: convert(screen.visibleFrame),
+                                 isBuiltin: number.map { CGDisplayIsBuiltin($0.uint32Value) != 0 })
         }
     }
     func serverWindows(spaces: NativeSpaces) -> [WindowRecord] {

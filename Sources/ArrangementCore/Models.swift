@@ -47,8 +47,10 @@ public struct DisplayRecord: Codable, Identifiable, Sendable {
     public var name: String
     public var frame: CGRect
     public var visibleFrame: CGRect
-    public init(id: String, name: String, frame: CGRect, visibleFrame: CGRect) {
+    public var isBuiltin: Bool?
+    public init(id: String, name: String, frame: CGRect, visibleFrame: CGRect, isBuiltin: Bool? = nil) {
         self.id = id; self.name = name; self.frame = frame; self.visibleFrame = visibleFrame
+        self.isBuiltin = isBuiltin
     }
 }
 
@@ -92,8 +94,11 @@ public struct Snapshot: Codable, Identifiable {
     public var displays: [DisplayRecord]
     public var spaces: [SpaceRecord]
     public var windows: [WindowRecord]
-    public init(name: String, backend: SnapshotBackend, displays: [DisplayRecord], spaces: [SpaceRecord] = [], windows: [WindowRecord]) {
+    public var profile: DisplayProfile?
+    public var updatedAt: Date?
+    public init(name: String, backend: SnapshotBackend, displays: [DisplayRecord], spaces: [SpaceRecord] = [], windows: [WindowRecord], profile: DisplayProfile? = nil) {
         self.name = name; self.backend = backend; self.displays = displays; self.spaces = spaces; self.windows = windows
+        self.profile = profile
     }
 }
 
@@ -103,12 +108,13 @@ public struct AppData: Codable {
     public var shortcuts: [String: Shortcut] = [:]
     public var selectedSnapshotID: UUID?
     public var spacesEnabled = true
+    public var automaticProfilesEnabled = false
     public var switcher = SwitcherSettings()
     public var repeatMode: LayoutRepeatMode = .none
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case version, snapshots, shortcuts, selectedSnapshotID, spacesEnabled, repeatMode, switcher
+        case version, snapshots, shortcuts, selectedSnapshotID, spacesEnabled, repeatMode, switcher, automaticProfilesEnabled
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -117,6 +123,7 @@ public struct AppData: Codable {
         shortcuts = try values.decode([String: Shortcut].self, forKey: .shortcuts)
         selectedSnapshotID = try values.decodeIfPresent(UUID.self, forKey: .selectedSnapshotID)
         spacesEnabled = try values.decode(Bool.self, forKey: .spacesEnabled)
+        automaticProfilesEnabled = try values.decodeIfPresent(Bool.self, forKey: .automaticProfilesEnabled) ?? false
         switcher = try values.decodeIfPresent(SwitcherSettings.self, forKey: .switcher) ?? SwitcherSettings()
         repeatMode = try values.decodeIfPresent(LayoutRepeatMode.self, forKey: .repeatMode) ?? .none
     }

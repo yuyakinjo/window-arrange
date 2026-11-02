@@ -129,7 +129,9 @@ private struct SnapshotsView: View {
     @ViewState private var name = ""
     @ViewState private var deleteID: UUID?
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            ProfileControls().padding(.horizontal, 24).padding(.vertical, 14)
+            Divider()
             if model.data.snapshots.isEmpty { empty }
             else {
                 HSplitView {
@@ -187,8 +189,10 @@ private struct SnapshotsView: View {
                     if model.selectedID == snapshot.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(accent) }
                 }
                 Text(snapshot.name).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                Text(snapshot.profile?.label(displays: snapshot.displays) ?? "手動復元用")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 Text("\(Set(snapshot.windows.map(\.appID)).count)アプリ · \(snapshot.windows.count)ウィンドウ").font(.caption).foregroundStyle(.secondary)
-                Text(snapshot.createdAt, format: .dateTime.month().day().hour().minute()).font(.caption2).foregroundStyle(.tertiary)
+                Text(snapshot.updatedAt ?? snapshot.createdAt, format: .dateTime.month().day().hour().minute()).font(.caption2).foregroundStyle(.tertiary)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                 .background(model.selectedID == snapshot.id ? accent.opacity(0.06) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(model.selectedID == snapshot.id ? accent.opacity(0.6) : Color.primary.opacity(0.08)))
@@ -209,6 +213,8 @@ private struct SnapshotDetail: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(snapshot.name).font(.title2.bold()).textSelection(.enabled)
+                        Text(snapshot.profile?.label(displays: snapshot.displays) ?? "手動復元用 · 自動適用の対象外")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text(snapshot.backend == .nativeSpaces ? "Spacesを含むレイアウト · 実験機能" : "ウィンドウの位置・サイズ").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -371,6 +377,7 @@ private struct SettingsView: View {
                 RepeatModePicker()
             }
             Section("Snapshot") {
+                ProfileControls()
                 Toggle("Spacesの所属も保存・復元する（実験機能）", isOn: Binding(get: { model.data.spacesEnabled }, set: { model.setSpacesEnabled($0) }))
                 LabeledContent("システムAPI", value: model.nativeSpaces.available ? "検出済み · 動作保証なし" : "この環境では利用不可")
                 Text("SpacesはmacOSの非公開APIをSwiftから直接呼び出します。外部アプリやプラグインのインストールは不要です。OSの更新で利用できなくなる可能性があり、Mac App Store向けの構成には適しません。")
@@ -387,6 +394,31 @@ private struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).disabled(model.busy)
+    }
+}
+
+private struct ProfileControls: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("画面構成に合わせてSnapshotを自動適用", isOn: Binding(
+                get: { model.data.automaticProfilesEnabled }, set: { model.setAutomaticProfilesEnabled($0) }))
+                .disabled(!model.storageAvailable)
+            Text("現在：\(model.currentProfileLabel)").font(.callout)
+            Text("構成ごとに一度保存してください。同じ構成では更新を確認します。自動適用は起動・接続変更・スリープ復帰後に行います。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                if !model.automaticProfileStatus.isEmpty {
+                    Text(model.automaticProfileStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                if let report = model.automaticProfileReport {
+                    Button("復元結果") { model.report = report }.font(.caption)
+                }
+                Spacer()
+                Button("手動用Snapshotを保存") { Task { await model.capture(manual: true) } }
+                    .font(.caption).disabled(model.busy || !model.trusted || !model.storageAvailable)
+            }
+        }
     }
 }
 

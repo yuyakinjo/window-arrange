@@ -10,6 +10,7 @@ Swift / SwiftUIで作成したmacOS用ウィンドウ配置アプリです。外
 - グローバルショートカットの割り当て・変更・解除。左右上下の半分、四隅の¼、画面いっぱい、中央、次のモニター、最小化、フルスクリーン切替に対応。
 - 左右・上下の配置を繰り返すモードをラジオボタンで選択。Cycle は同じ画面内で1/2・2/3・1/3を切り替え、Cycle Displays は半分のサイズでディスプレイ間を移動します。
 - 名前付きSnapshotの保存、プレビュー、名前変更、削除。
+- 内蔵画面のみ・MacBook＋外部モニター・クラムシェルをモニター構成別に保存。同じ構成は更新を確認し、構成変更後の自動適用を設定可能。
 - 複数アプリの位置・サイズ・モニター・最小化状態をまとめて記録・復元。
 - **Spacesの所属の記録・復元（実験機能）**。macOS内蔵のシステムAPIをSwiftから直接呼び出します。
 - Snapshot保存と選択中のSnapshot復元にもショートカットを割り当て可能。
@@ -75,6 +76,16 @@ SwiftPMの追加サンドボックスを起動できない環境では、`WINDOW
 ショートカット一覧の「変更したショートカットのみ表示」をオンにすると、キーを割り当てた項目だけ表示します。割り当てを解除した項目は対象外になり、チェックを外すと全項目に戻ります。フィルターの選択は次回起動時も維持されます。
 
 終了するには、メニューバーのアイコン →「終了」を選びます。
+
+## モニター構成別のSnapshot
+
+「Snapshotを保存」は現在の画面構成を判定して保存します。MacBook単体、MacBookを開いて外部モニターを使う場合、クラムシェルのそれぞれで、一度ずつ希望の配置を保存してください。自宅と会社など外部モニターの組み合わせが異なる場合も別の構成として管理します。蓋のないMacなどは「外部モニターのみ」として扱います。
+
+同じ構成のSnapshotがある場合は「更新」「キャンセル」「手動用として別保存」を表示します。「更新」は既存の名前・IDを維持して配置を置き換え、更新日時を記録します。構成の判定には使用モードとモニターの識別情報を使い、Snapshot名・モニターの列挙順・解像度の違いでは別の構成にしません。複数の重複データが存在した場合、自動適用は停止し、次回の更新で選択中の一致するSnapshot（なければ一覧で先の一致するSnapshot）を更新先にして、ほかは手動用として残します。
+
+Snapshots画面または設定の「画面構成に合わせてSnapshotを自動適用」をオンにすると、起動時・設定をオンにしたとき・モニター構成変更・スリープ復帰後に、一致するSnapshotを復元します。初期状態はオフです。画面構成が3秒以上安定し、ほかの保存・復元・キー記録などが終わるまで待ってから実行します。一致するSnapshotがない場合は何もしません。自動復元中に別の構成へ変わると処理を中断し、新しい構成が安定してから判定し直します。同じ構成での失敗を繰り返し自動実行することはありません。結果は画面内に表示し、「復元結果」から詳細を確認できます。
+
+以前のバージョンで保存したSnapshotと「手動用Snapshotを保存」で作成したSnapshotは、そのまま手動復元できます。自動適用の対象には入りません。以前の配置を自動適用に使う場合は、対応する環境でそのSnapshotを復元してから「Snapshotを保存」を実行してください。自動復元でも通常の復元と同じ制約があり、閉じたアプリ・書類を開き直したり、削除したSpaceを再作成したりはしません。Spacesの取得のため、一時的にデスクトップが切り替わる場合があります。
 
 Spacesの所属を記録しない場合は「設定」のトグルをオフにします。設定は新規Snapshotに適用され、既存Snapshotは保存時の方式で復元します。起動時にはショートカットが未設定です。macOSや他アプリと競合する組み合わせは登録エラーを表示します。キーは物理キーコードで記録するため、キーボード配列変更後は表示と実際のキーが異なる場合があります。
 
@@ -203,6 +214,8 @@ bun run test
 
 Swift Testingで座標変換、モニター選択、ウィンドウ照合、JSONの保存・読み込み、破損データ、キー競合判定を確認します。Bun標準のテストランナーで開発モードの失敗・中断時のアプリ維持、署名検証と更新の順序、二重起動防止、Swiftファイルの編集・追加・削除による実際の `bun --watch` 再実行を確認します。開発ツールのテストだけなら `bun run test:tools` を実行できます。`--diagnostics` は権限やSpaceシンボルの検出状況を読み取り、ウィンドウ操作や保存はしません。
 
+構成別Snapshotには、使用モード・モニター識別、重複保存の拒否、更新時のID・名前の維持、既存JSONとの互換性、構成の安定待ち、操作中の延期、再接続・再有効化、復元中断後の再判定を検証する20件のテストを追加しています。追加後はSwiftの188件とBunの13件が成功しました。内蔵画面のみの実機判定と管理画面の表示は確認済みです。外部モニター着脱・蓋開閉を伴う自動復元は、実機での追加確認が必要です。
+
 `--restore-diagnostics` は、既存Snapshotと現在のウィンドウを照合し、アプリごとの保存数・現在数・照合数と、見つからないSpaceの数を表示します。WindowServerにだけ現れる非表示Spaceのウィンドウ数と、それを含めた照合数も表示します。Spaceの表示切り替え・ウィンドウの移動・設定保存は行いません。
 
 デバッグ版には、自分自身が生成する使い捨てのウィンドウだけを操作する統合チェックも含めています。実行にはアクセシビリティ権限と、Spaces間の検証用に既存の通常デスクトップ2つが必要です。権限は自動的に付与しません。
@@ -247,6 +260,9 @@ bun run build debug
 - [Apple: AXUIElementSetAttributeValue](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue)
 - [Apple: AXIsProcessTrustedWithOptions](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions)
 - [Apple: NSScreen.visibleFrame](https://developer.apple.com/documentation/appkit/nsscreen/visibleframe)
+- [Apple: 画面構成の変更通知](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationdidchangescreenparameters(_:))
+- [Apple: CGDisplayIsBuiltin](https://developer.apple.com/documentation/coregraphics/cgdisplayisbuiltin(_:))
+- [Apple: IOPM.hの蓋状態プロパティ定義](https://github.com/apple/darwin-xnu/blob/main/iokit/IOKit/pwr_mgt/IOPM.h)
 - [yabaiのSpaces操作実装](https://github.com/asmvik/yabai/blob/master/src/space_manager.c)（非公開APIのシグネチャと方式の参考。コードやアプリへの依存はありません）
 
 ウィンドウ切替追加後の検証結果：Swiftの自動テスト79件とBunのテスト13件が成功し、デバッグ／リリースのビルド、2表示形式×ライト／ダークの描画を確認しました。

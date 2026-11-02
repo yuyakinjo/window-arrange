@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }, perform: { [weak self] action in self?.performMenuAction(action) },
            trackingChanged: { [weak self] tracking in self?.model.headMotion.setMenuTracking(tracking) })
         model.switcher.start()
+        model.startProfileMonitoring()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             // Let the Bun development runner request a normal app shutdown with SIGTERM.
@@ -94,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        model.stopProfileMonitoring()
         model.switcher.stop()
         model.headMotion.stop()
         statusMenu?.stop()
