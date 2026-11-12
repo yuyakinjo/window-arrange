@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
            trackingChanged: { [weak self] tracking in self?.model.headMotion.setMenuTracking(tracking) })
         model.switcher.start()
         model.startProfileMonitoring()
+        model.trackpadEdge.startIfEnabled()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             // Let the Bun development runner request a normal app shutdown with SIGTERM.
@@ -86,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             termination.resume()
             developmentTermination = termination
             if let section = UserDefaults.standard.string(forKey: "developmentSection"),
-               ["snapshots", "shortcuts", "switcher", "airpods", "settings"].contains(section) {
+               ["snapshots", "shortcuts", "switcher", "airpods", "trackpad", "settings"].contains(section) {
                 model.section = section
             }
             showMainWindow()
@@ -98,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.stopProfileMonitoring()
         model.switcher.stop()
         model.headMotion.stop()
+        model.trackpadEdge.stop()
         statusMenu?.stop()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {

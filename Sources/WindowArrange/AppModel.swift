@@ -36,6 +36,7 @@ final class AppModel: ObservableObject {
     let switcher = WindowSwitcherController()
     let loginItem = LoginItemController()
     let headMotion = HeadMotionController()
+    let trackpadEdge = TrackpadEdgeController()
     private let hotKeys = HotKeyManager()
     private let store: DataStore
     private var timer: Timer?
@@ -72,6 +73,7 @@ final class AppModel: ObservableObject {
         headMotion.isBusy = { [weak self] in
             self?.busy == true || self?.recording != nil || self?.switcher.isOpen == true
         }
+        trackpadEdge.isBusy = { [weak self] in self?.recording != nil }
         resumeHotKeys()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
