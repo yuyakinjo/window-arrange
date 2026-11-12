@@ -67,7 +67,12 @@ public struct TrackpadEdgeSlide {
     }
 
     /// Feeds one frame of contacts and returns the notches it produced.
-    public mutating func update(contacts: [TrackpadContact], time: TimeInterval) -> [TrackpadEdgeStep] {
+    ///
+    /// `suppressed` blocks the gesture while the keyboard is in use. Frames are still fed
+    /// in, so the stream stays continuous and a finger resting through a typing pause
+    /// cannot re-arm itself the moment the block ends.
+    public mutating func update(contacts: [TrackpadContact], time: TimeInterval,
+                                suppressed: Bool = false) -> [TrackpadEdgeStep] {
         guard time.isFinite else { reset(); return [] }
         if let previousTime, time < previousTime || time - previousTime > maximumSampleGap { reset() }
         previousTime = time
@@ -75,6 +80,14 @@ public struct TrackpadEdgeSlide {
         guard !contacts.isEmpty else {
             // Every finger is up: a cancelled gesture may start again.
             phase = .idle
+            activeEdge = nil
+            identifier = nil
+            activated = false
+            return []
+        }
+        // A finger already down while the keyboard is in use has to lift before it counts.
+        guard !suppressed else {
+            phase = .waitingForLift
             activeEdge = nil
             identifier = nil
             activated = false

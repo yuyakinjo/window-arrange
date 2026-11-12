@@ -13,7 +13,7 @@ struct TrackpadEdgeSettingsView: View {
                                 .font(.headline)
                         }.disabled(!controller.available)
                         Text(controller.status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                        Text("端の細い帯に指を置いてから上下にスライドします。帯の外から入ってきた指や、2本以上の指には反応しません。スライド中もポインタは動きます。")
+                        Text("端の細い帯に指を置いてから上下にスライドします。帯の外から入ってきた指や、2本以上の指には反応しません。")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -36,6 +36,17 @@ struct TrackpadEdgeSettingsView: View {
                         Toggle("音量の端を使う", isOn: $controller.volumeEdgeEnabled)
                         Toggle("スライド方向を反転", isOn: $controller.reversed)
                         Toggle("細かく調整する（1目盛りを1/4の幅で変える）", isOn: $controller.fineControl)
+                        Toggle("端をなぞっている間はポインタを止める", isOn: $controller.suppressPointer)
+                        HStack {
+                            Text("キー入力後の待ち時間")
+                            Slider(value: $controller.typingGuard, in: 0...2, step: 0.1)
+                            Text(controller.typingGuard == 0 ? "なし" : String(format: "%.1f秒", controller.typingGuard))
+                                .monospacedDigit().frame(width: 52)
+                        }
+                        Text(controller.typingBlocked
+                             ? "キー入力中のため、いまは反応しません。"
+                             : "タイピング中に端へ触れても反応しないよう、最後のキー入力からこの時間が過ぎるまで待ちます。待っている間に置いた指は、いったん離すまで操作になりません。")
+                            .font(.caption).foregroundStyle(controller.typingBlocked ? Color.accentColor : .secondary)
                         HStack {
                             Text("帯の幅")
                             Slider(value: $controller.zoneWidth, in: 0.04...0.2, step: 0.01)

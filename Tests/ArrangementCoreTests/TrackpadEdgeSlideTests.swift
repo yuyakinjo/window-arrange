@@ -84,6 +84,44 @@ struct TrackpadEdgeSlideTests {
         #expect(!slide(&gesture, x: 0.02, from: 0.2, to: 0.9, start: 0.61).isEmpty)
     }
 
+    /// Feeds frames at the device's real rate so timestamps stay continuous.
+    private func hold(_ gesture: inout TrackpadEdgeSlide, x: Double, from: Double, to: Double,
+                      start time: Double, seconds: Double, suppressed: Bool) -> [TrackpadEdgeStep] {
+        var steps: [TrackpadEdgeStep] = []
+        let frames = max(1, Int(seconds / 0.008))
+        for frame in 0...frames {
+            let y = from + (to - from) * Double(frame) / Double(frames)
+            steps += gesture.update(contacts: [contact(x, y)], time: time + Double(frame) * 0.008,
+                                    suppressed: suppressed)
+        }
+        return steps
+    }
+
+    @Test func aFingerRestingThroughTypingCannotFireWhenTypingStops() {
+        var gesture = TrackpadEdgeSlide()
+        // A palm sits on the strip for a second of typing, then drags across it.
+        #expect(hold(&gesture, x: 0.02, from: 0.4, to: 0.45, start: 0, seconds: 1, suppressed: true).isEmpty)
+        #expect(gesture.phase == .waitingForLift)
+        #expect(hold(&gesture, x: 0.02, from: 0.45, to: 0.95, start: 1.01, seconds: 0.5, suppressed: false).isEmpty)
+        #expect(gesture.phase == .waitingForLift)
+    }
+
+    @Test func liftingDuringTypingAllowsADeliberateSlideAfterwards() {
+        var gesture = TrackpadEdgeSlide()
+        #expect(hold(&gesture, x: 0.02, from: 0.4, to: 0.45, start: 0, seconds: 0.5, suppressed: true).isEmpty)
+        // Fingers are up: the frame still arrives, and the gesture becomes available again.
+        #expect(gesture.update(contacts: [], time: 0.51, suppressed: true).isEmpty)
+        #expect(gesture.phase == .idle)
+        #expect(!hold(&gesture, x: 0.02, from: 0.2, to: 0.9, start: 0.52, seconds: 0.4, suppressed: false).isEmpty)
+    }
+
+    @Test func typingInTheMiddleOfASlideStopsIt() {
+        var gesture = TrackpadEdgeSlide()
+        #expect(!hold(&gesture, x: 0.02, from: 0.2, to: 0.5, start: 0, seconds: 0.3, suppressed: false).isEmpty)
+        #expect(hold(&gesture, x: 0.02, from: 0.5, to: 0.9, start: 0.31, seconds: 0.3, suppressed: true).isEmpty)
+        #expect(gesture.phase == .waitingForLift)
+    }
+
     @Test func leavingTheStripCancelsTheGesture() {
         var gesture = TrackpadEdgeSlide()
         _ = slide(&gesture, x: 0.02, from: 0.2, to: 0.5)

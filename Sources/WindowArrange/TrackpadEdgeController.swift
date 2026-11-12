@@ -14,6 +14,8 @@ final class TrackpadEdgeController: ObservableObject {
     @Published private(set) var touchX: Double = 0
     @Published private(set) var touchY: Double = 0
     @Published private(set) var insideZone: TrackpadEdge?
+    /// True while a recent key press is holding the gesture off.
+    @Published private(set) var typingBlocked = false
 
     @Published var enabled: Bool {
         didSet {
@@ -36,6 +38,17 @@ final class TrackpadEdgeController: ObservableObject {
     @Published var reversed: Bool {
         didSet { defaults.set(reversed, forKey: "trackpadEdgeReversed"); gesture.reset() }
     }
+    /// Holds the pointer still while a finger is working the strip.
+    @Published var suppressPointer: Bool {
+        didSet {
+            defaults.set(suppressPointer, forKey: "trackpadEdgeSuppressPointer")
+            if !suppressPointer { releasePointer() }
+        }
+    }
+    /// Seconds after the last key press during which edge slides are ignored.
+    @Published var typingGuard: Double {
+        didSet { defaults.set(typingGuard, forKey: "trackpadEdgeTypingGuard") }
+    }
     @Published var fineControl: Bool {
         didSet { defaults.set(fineControl, forKey: "trackpadEdgeFineControl") }
     }
@@ -53,6 +66,7 @@ final class TrackpadEdgeController: ObservableObject {
     private var wakeObserver: NSObjectProtocol?
     private var sleepObserver: NSObjectProtocol?
     private var lastReadout: TimeInterval = 0
+    private var pin: CGPoint?
 
     var available: Bool { bridge.available }
 
@@ -65,6 +79,9 @@ final class TrackpadEdgeController: ObservableObject {
         stepDistance = (0.02...0.12).contains(savedStep) ? savedStep : 0.045
         swapped = defaults.bool(forKey: "trackpadEdgeSwapped")
         reversed = defaults.bool(forKey: "trackpadEdgeReversed")
+        suppressPointer = defaults.object(forKey: "trackpadEdgeSuppressPointer") as? Bool ?? true
+        let savedGuard = defaults.object(forKey: "trackpadEdgeTypingGuard") as? Double
+        typingGuard = (savedGuard.map { (0...2).contains($0) ? $0 : 0.8 }) ?? 0.8
         fineControl = defaults.bool(forKey: "trackpadEdgeFineControl")
         brightnessEdgeEnabled = defaults.object(forKey: "trackpadEdgeBrightnessEnabled") as? Bool ?? true
         volumeEdgeEnabled = defaults.object(forKey: "trackpadEdgeVolumeEnabled") as? Bool ?? true
@@ -124,6 +141,8 @@ final class TrackpadEdgeController: ObservableObject {
         deviceCount = 0
         contactCount = 0
         insideZone = nil
+        typingBlocked = false
+        releasePointer()
         gesture.reset()
         status = "オフです。トラックパッドの端を使うには有効にしてください。"
     }
@@ -158,6 +177,8 @@ final class TrackpadEdgeController: ObservableObject {
         running = false
         contactCount = 0
         insideZone = nil
+        typingBlocked = false
+        releasePointer()
         gesture.reset()
         status = "スリープ中は停止しています。復帰すると自動で再開します。"
     }
@@ -165,19 +186,49 @@ final class TrackpadEdgeController: ObservableObject {
     private func receive(contacts: [TrackpadContact], time: TimeInterval) {
         guard running else { return }
         updateReadout(contacts)
-        let steps = gesture.update(contacts: contacts, time: time)
+        // Typing with a palm or a fingertip over the strip must never change anything.
+        let typing = !contacts.isEmpty && typingGuard > 0
+            && CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < typingGuard
+        if typing != typingBlocked { typingBlocked = typing }
+        // Modifiers and a held button mean the finger is aiming the pointer, not the strip,
+        // so the gesture stays out of the way instead of freezing the pointer for nothing.
+        // Only a lone contact that is still a candidate can reach the gesture, so the
+        // modifier and button queries stay off the hot path for every other frame.
+        let candidate = contacts.count == 1 && gesture.phase != .waitingForLift
+        let suppressed = candidate && (typing
+            || !SpaceSwitchEvents.heldModifiers.isEmpty
+            || CGEventSource.buttonState(.combinedSessionState, button: .left))
+        let steps = gesture.update(contacts: contacts, time: time, suppressed: suppressed)
+        updatePointer()
         guard !steps.isEmpty else { return }
         guard AXIsProcessTrusted() else {
             status = "アクセシビリティの許可が必要です。システム設定の「プライバシーとセキュリティ」で許可してください。"
             return
         }
-        // Option with a volume or brightness key opens System Settings instead of adjusting.
-        guard SpaceSwitchEvents.heldModifiers.isEmpty else {
-            lastAction = "キーボードの修飾キーを離してから操作してください"
-            return
-        }
         guard !isBusy() else { return }
         for step in steps { perform(key(for: step)) }
+    }
+
+    /// Keeps the pointer where the gesture started. Dropping pointer events in an event
+    /// tap does not work: the cursor is drawn before a tap sees the event, so it moves anyway.
+    private func updatePointer() {
+        guard suppressPointer else { return }
+        switch gesture.phase {
+        // Before the slide starts the finger may just be aiming the pointer, so hold it
+        // only while the finger is still inside the strip itself.
+        case .armed where insideZone != nil, .sliding:
+            if pin == nil { pin = CGEvent(source: nil)?.location }
+            if let pin { CGWarpMouseCursorPosition(pin) }
+        default:
+            releasePointer()
+        }
+    }
+
+    private func releasePointer() {
+        guard pin != nil else { return }
+        pin = nil
+        // Warping leaves the pointer briefly deaf to the device; this reconnects it at once.
+        CGAssociateMouseAndMouseCursorPosition(1)
     }
 
     private func key(for step: TrackpadEdgeStep) -> MediaKey {
@@ -196,6 +247,7 @@ final class TrackpadEdgeController: ObservableObject {
     }
 
     private func updateReadout(_ contacts: [TrackpadContact]) {
+        if contacts.isEmpty && typingBlocked { typingBlocked = false }
         let zone: TrackpadEdge? = contacts.first.flatMap { contact in
             contact.x <= zoneWidth ? .left : contact.x >= 1 - zoneWidth ? .right : nil
         }
