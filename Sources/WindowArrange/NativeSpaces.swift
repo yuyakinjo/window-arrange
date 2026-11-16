@@ -54,6 +54,34 @@ final class NativeSpaces {
     }
     var available: Bool { connection != nil && copyDisplays != nil && copySpaces != nil && getWindow != nil && (moveWindows != nil || bridgeOperation != nil || hasBridgeEntryPoint) }
 
+    /// Returns nil when WindowServer cannot identify the relevant display or Space.
+    func hasAdjacentSpace(toRight: Bool, displayID: String?) -> Bool? {
+        guard let connection, let copyDisplays,
+              let displays = copyDisplays(connection())?.takeRetainedValue() as? [[String: Any]] else { return nil }
+        return Self.hasAdjacentSpace(toRight: toRight, displayID: displayID, displays: displays) { id in
+            self.currentSpace?(connection(), id as CFString)
+        }
+    }
+
+    static func hasAdjacentSpace(toRight: Bool, displayID: String?, displays: [[String: Any]],
+                                 currentSpace: (String) -> UInt64?) -> Bool? {
+        // With separate Spaces disabled WindowServer reports a single managed display,
+        // sometimes named "Main" instead of a physical display UUID.
+        let display: [String: Any]?
+        if displays.count == 1 { display = displays[0] }
+        else if let displayID {
+            display = displays.first { ($0["Display Identifier"] as? String)?.caseInsensitiveCompare(displayID) == .orderedSame }
+        } else { display = nil }
+        guard let display, let id = display["Display Identifier"] as? String,
+              let rawSpaces = display["Spaces"] as? [[String: Any]], !rawSpaces.isEmpty else { return nil }
+        let ids = rawSpaces.compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
+        guard ids.count == rawSpaces.count else { return nil }
+        let current = currentSpace(id).flatMap { $0 == 0 ? nil : $0 }
+            ?? (display["Current Space"] as? [String: Any]).flatMap { ($0["id64"] as? NSNumber)?.uint64Value }
+        guard let current, let index = ids.firstIndex(of: current) else { return nil }
+        return toRight ? index < ids.count - 1 : index > 0
+    }
+
     func spaces(includeFullscreen: Bool = false) throws -> [LiveSpace] {
         guard available, let connection, let copyDisplays,
               let raw = copyDisplays(connection())?.takeRetainedValue() as? [[String: Any]] else {

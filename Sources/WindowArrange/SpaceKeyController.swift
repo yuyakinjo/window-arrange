@@ -13,6 +13,7 @@ final class SpaceKeyController: ObservableObject {
     @Published private(set) var status = ""
     private let defaults: UserDefaults
     private var installed = false
+    private static let spaces = NativeSpaces()
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -36,7 +37,15 @@ final class SpaceKeyController: ObservableObject {
         if !installed {
             installed = ds_keys_install { direction in
                 // Keyboard tap thread: hand the work to the main thread and return at once.
-                DispatchQueue.main.async { _ = ds_post_switch(direction) }
+                DispatchQueue.main.async {
+                    let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+                    let number = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+                    let uuid = number.flatMap { CGDisplayCreateUUIDFromDisplayID($0.uint32Value)?.takeRetainedValue() }
+                    let displayID = uuid.map { CFUUIDCreateString(nil, $0) as String }
+                    if SpaceKeyController.spaces.hasAdjacentSpace(toRight: direction == DSDirectionRight, displayID: displayID) != false {
+                        _ = ds_post_switch(direction)
+                    }
+                }
             }
         }
         guard installed else {
