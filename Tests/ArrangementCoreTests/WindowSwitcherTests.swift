@@ -329,3 +329,66 @@ struct SwitcherKeyboardRoutingTests {
         #expect(SwitcherKeyRouting.command(key: key(126), settings: settings, heldModifiers: 0) == .cancel)
     }
 }
+
+struct SwitcherSpaceGroupingTests {
+    let spaces = [
+        SwitcherSpace(id: 10, index: 1, label: "デスクトップ 1", displayID: "main"),
+        SwitcherSpace(id: 20, index: 2, label: "デスクトップ 2", displayID: "main"),
+        SwitcherSpace(id: 30, index: 3, label: "デスクトップ 3", displayID: "side")
+    ]
+    let ordered = [
+        SwitcherWindow(id: "b1", spaces: [20]),
+        SwitcherWindow(id: "a1", spaces: [10]),
+        SwitcherWindow(id: "sticky", spaces: [10, 20, 30]),
+        SwitcherWindow(id: "c1", spaces: [30]),
+        SwitcherWindow(id: "b2", spaces: [20]),
+        SwitcherWindow(id: "none", windowless: true)
+    ]
+    @Test func currentSpaceLeadsAndOthersFollowMissionControlOrder() {
+        let groups = SwitcherSpaceGrouping.groups(ordered, spaces: spaces, current: 20, side: .leading)
+        #expect(groups.map(\.space) == [20, 10, 30, nil])
+        #expect(groups.map(\.isCurrent) == [true, false, false, false])
+        #expect(groups[0].windowIDs == ["b1", "sticky", "b2"])
+        #expect(groups.last?.windowIDs == ["none"])
+    }
+    @Test func currentSpaceCanTrailWithUnknownSpaceWindowsAtTheOppositeEnd() {
+        let groups = SwitcherSpaceGrouping.groups(ordered, spaces: spaces, current: 20, side: .trailing)
+        #expect(groups.map(\.space) == [nil, 10, 30, 20])
+        #expect(groups.filter(\.isCurrent).map(\.space) == [20])
+    }
+    @Test func emptySpacesAreOmittedAndNoGroupIsHighlightedWithoutACurrentSpace() {
+        let groups = SwitcherSpaceGrouping.groups([SwitcherWindow(id: "x", spaces: [30])], spaces: spaces, current: nil, side: .leading)
+        #expect(groups.map(\.space) == [30])
+        #expect(!groups[0].isCurrent)
+    }
+    @Test func currentSpaceUsesTheSwitcherDisplayOrFallsBackToTheOnlyVisibleSpace() {
+        #expect(SwitcherSpaceGrouping.currentSpace(spaces: spaces, visible: [20, 30], displayID: "SIDE") == 30)
+        #expect(SwitcherSpaceGrouping.currentSpace(spaces: spaces, visible: [20], displayID: "Main-UUID") == 20)
+        #expect(SwitcherSpaceGrouping.currentSpace(spaces: spaces, visible: [], displayID: "main") == nil)
+    }
+    @Test func verticalNavigationStaysInsideTheSelectedSpaceGroup() {
+        var selection = SwitcherSelection()
+        selection.open(ids: ["a", "b", "c", "d", "e"], current: nil, backwards: false)
+        selection.select("b")
+        let groups = [["a"], ["b", "c", "d", "e"]]
+        selection.moveVertically(1, groups: groups, columns: { min(3, $0) })
+        #expect(selection.selected == "e")
+        selection.moveVertically(1, groups: groups, columns: { min(3, $0) })
+        #expect(selection.selected == "b")
+        selection.select("a")
+        selection.moveVertically(1, groups: groups, columns: { min(3, $0) })
+        #expect(selection.selected == "a")
+    }
+    @Test func groupingRequiresAllSpacesAndOldSettingsDefaultToLeadingOff() throws {
+        var settings = SwitcherSettings(); settings.groupBySpace = true
+        #expect(settings.groupsBySpace)
+        settings.spaces = .visible
+        #expect(!settings.groupsBySpace)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SwitcherSettings())) as! [String: Any]
+        json.removeValue(forKey: "groupBySpace"); json.removeValue(forKey: "currentSpaceSide")
+        let decoded = try JSONDecoder().decode(SwitcherSettings.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(!decoded.groupBySpace && decoded.currentSpaceSide == .leading)
+        settings.currentSpaceSide = .trailing
+        #expect(try JSONDecoder().decode(SwitcherSettings.self, from: JSONEncoder().encode(settings)) == settings)
+    }
+}
