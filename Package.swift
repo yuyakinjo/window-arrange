@@ -7,7 +7,8 @@ let package = Package(
     products: [.executable(name: "WindowArrange", targets: ["WindowArrange"])],
     targets: [
         .target(name: "ArrangementCore"),
-        .executableTarget(name: "WindowArrange", dependencies: ["ArrangementCore"]),
+        .target(name: "CDockSwipe"),
+        .executableTarget(name: "WindowArrange", dependencies: ["ArrangementCore", "CDockSwipe"]),
         .testTarget(name: "ArrangementCoreTests", dependencies: ["ArrangementCore"]),
         .testTarget(name: "WindowArrangeTests", dependencies: ["WindowArrange"])
     ],
