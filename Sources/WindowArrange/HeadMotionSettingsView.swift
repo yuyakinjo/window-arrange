@@ -70,6 +70,9 @@ struct HeadMotionSettingsView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Toggle("左右を反転", isOn: $controller.reversed)
+                        Toggle("アニメーションなしで高速に切り替える", isOn: $controller.instantSwitch)
+                        Text("Dockに合成スワイプを送り、スライドのアニメーションを省いて即座に移動します。オフにすると、Mission Controlのショートカット（⌃←／⌃→など）を送る従来の方法で切り替えます。")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text(controller.mode == .turn
                              ? "画面を正面に見た状態から、無理のない範囲で素早く左または右を向くと1回移動します。向いたまま保つ必要はありません。正面に戻して少し待ってから次の操作をしてください。"
                              : "左右に傾けて少し保つと1回移動します。正面に戻してから次の操作をしてください。")
