@@ -375,6 +375,7 @@ private struct SettingsView: View {
                 LabeledContent("アクセシビリティ", value: model.trusted ? "許可済み" : "未許可")
                 Button("システム設定を開く") { model.accessibility.requestAccess() }
             }
+            SpaceKeySettings(keys: model.spaceKeys)
             Section("サイズの繰り返し") {
                 RepeatModePicker()
             }
@@ -436,6 +437,19 @@ private struct RepeatModePicker: View {
             Text("Cycle は同じ画面で 1/2 → 2/3 → 1/3 を繰り返します。Cycle Displays は半画面ずつ移動します。右半分なら「この画面の右 → 次の画面の左 → 右 → …」と巡回します。開いているMacBookの内蔵画面も対象です。None はmacOS標準の半分配置を優先し、標準機能が使えないアプリでは座標を指定して配置します。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+private struct SpaceKeySettings: View {
+    @ObservedObject var keys: SpaceKeyController
+    var body: some View {
+        Section("デスクトップの切り替え") {
+            Toggle("⌃←／⌃→ でアニメーションなしに素早く移動", isOn: $keys.enabled)
+            Text(keys.status).font(.caption).foregroundStyle(.secondary)
+            Text("Mission Controlの「左／右の操作スペースに移動」のキーをmacOSより先に受け取り、Dockへの合成スワイプで切り替えます。ショートカットを変更している場合はそのキーが対象です。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in keys.refresh() }
     }
 }
 

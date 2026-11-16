@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
     let loginItem = LoginItemController()
     let headMotion = HeadMotionController()
     let trackpadEdge = TrackpadEdgeController()
+    let spaceKeys = SpaceKeyController()
     private let hotKeys = HotKeyManager()
     private let store: DataStore
     private var timer: Timer?
@@ -79,7 +80,11 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 let trusted = AXIsProcessTrusted()
-                if trusted != self.trusted { self.trusted = trusted; self.switcher.permissionsChanged() }
+                if trusted != self.trusted {
+                    self.trusted = trusted
+                    self.switcher.permissionsChanged()
+                    self.spaceKeys.refresh()
+                }
             }
         }
     }

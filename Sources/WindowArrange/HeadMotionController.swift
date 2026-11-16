@@ -3,6 +3,7 @@ import ApplicationServices
 import CoreMotion
 import SwiftUI
 import ArrangementCore
+import CDockSwipe
 import OSLog
 
 enum HeadMotionMode: String, CaseIterable {
@@ -40,6 +41,10 @@ final class HeadMotionController: ObservableObject {
     @Published var reversed: Bool {
         didSet { defaults.set(reversed, forKey: "headTiltReversed"); resetGestures() }
     }
+    /// Switch with a synthetic Dock swipe (no slide animation) instead of the Mission Control shortcut.
+    @Published var instantSwitch: Bool {
+        didSet { defaults.set(instantSwitch, forKey: "headMotionInstantSwitch") }
+    }
     var isBusy: () -> Bool = { false }
     private let defaults: UserDefaults
     private let manager = CMHeadphoneMotionManager()
@@ -72,6 +77,7 @@ final class HeadMotionController: ObservableObject {
         let saved = defaults.double(forKey: "headTiltThreshold")
         threshold = saved.isFinite && (10...40).contains(saved) ? saved : 20
         reversed = defaults.bool(forKey: "headTiltReversed")
+        instantSwitch = defaults.object(forKey: "headMotionInstantSwitch") as? Bool ?? true
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -285,6 +291,12 @@ final class HeadMotionController: ObservableObject {
             lastAction = "アクセシビリティの許可が必要です"
             return
         }
+        let time = Date().formatted(date: .omitted, time: .standard)
+        let arrow = direction == .left ? "← 左" : "右 →"
+        if instantSwitch, ds_post_switch(direction == .left ? DSDirectionLeft : DSDirectionRight) {
+            lastAction = "\(time)  \(arrow)への高速切り替えを送信"
+            return
+        }
         let shortcut: SpaceSwitchShortcut
         do {
             let domain = "com.apple.symbolichotkeys" as CFString
@@ -301,7 +313,6 @@ final class HeadMotionController: ObservableObject {
             return
         }
         for event in events { event.post(tap: .cghidEventTap) }
-        let time = Date().formatted(date: .omitted, time: .standard)
-        lastAction = "\(time)  \(direction == .left ? "← 左" : "右 →")への切り替えを送信"
+        lastAction = "\(time)  \(arrow)への切り替えを送信"
     }
 }
