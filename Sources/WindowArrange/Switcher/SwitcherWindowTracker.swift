@@ -23,6 +23,7 @@ struct SwitcherInventory {
     var activeWindow: String?
     var cursorApp: String?
     var cursorWindows: Set<String>
+    var spaces: [SwitcherSpace] = []
 }
 
 /// AX queries run on one worker. Cache keys contain the launch date as well as the PID,
@@ -212,7 +213,9 @@ final class SwitcherScanner: @unchecked Sendable {
         if let notify, subscriptions == nil { subscriptions = SwitcherAXSubscriptions(notify: notify) }
         subscriptions?.update(apps: apps, windows: result)
         return SwitcherInventory(windows: result, visibleSpaces: visible, activeWindow: activeWindow,
-                                 cursorApp: frontCursorApp, cursorWindows: cursorWindows)
+                                 cursorApp: frontCursorApp, cursorWindows: cursorWindows,
+                                 spaces: allSpaces.map { SwitcherSpace(id: $0.runtimeID, index: $0.record.index,
+                                                                       label: $0.record.label, displayID: $0.record.displayID) })
     }
 
     func stopObserving() { subscriptions?.stop(); subscriptions = nil }

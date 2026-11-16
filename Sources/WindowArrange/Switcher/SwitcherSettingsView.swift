@@ -74,6 +74,14 @@ struct SwitcherSettingsView: View {
                 choice("並び順", \.order)
                 Toggle("アプリごとに1件だけ表示", isOn: binding(\.onePerApp))
                 Toggle("macOS標準のタブを個別に表示", isOn: binding(\.separateTabs))
+                Toggle("Spaceごとにまとめて横に並べる", isOn: binding(\.groupBySpace))
+                    .disabled(model.data.switcher.spaces != .all)
+                if model.data.switcher.groupBySpace {
+                    choice("現在のSpaceの位置", \.currentSpaceSide)
+                        .disabled(model.data.switcher.spaces != .all)
+                }
+                Text("Spaceごとのまとめ表示は、表示対象のSpacesが「すべてのSpaces」のときに使えます。現在のSpaceは枠線を強調し、指定した側の端に置きます。各Space内は上の並び順に従います。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("タブはアプリがアクセシビリティで公開している場合に対応します。使用履歴と作成順はWindow Arrangeの起動後から記録します。")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -180,9 +188,50 @@ private struct SwitcherSettingsPreview: View {
                 placeholder("表示条件に一致するウィンドウはありません", icon: "macwindow")
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
-                        ForEach(controller.previewWindows, id: \.info.id) { window in
-                            VStack(alignment: .leading, spacing: 4) {
+                    Group { if controller.previewGroups.isEmpty {
+                        previewGrid(controller.previewWindows)
+                    } else {
+                        let byID = Dictionary(uniqueKeysWithValues: controller.previewWindows.map { ($0.info.id, $0) })
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(controller.previewGroups) { group in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(group.label).font(.caption.weight(.semibold)).padding(.horizontal, 4)
+                                    previewGrid(group.windowIDs.compactMap { byID[$0] })
+                                }
+                                .padding(6)
+                                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(group.isCurrent ? Color.accentColor : .primary.opacity(0.1),
+                                                                                          lineWidth: group.isCurrent ? 2 : 1))
+                            }
+                        }
+                    } }
+                    .padding(controller.settings.shape == .circle ? 8 : 3)
+                    .background {
+                        if controller.settings.shape == .circle {
+                            RoundedRectangle(cornerRadius: 44).fill(.primary.opacity(0.04))
+                        }
+                    }
+                }
+            }
+            if let name = controller.previewAppName {
+                Text("「現在のアプリ」の基準：\(name)").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("カーソル下の対象は、この設定画面を開いた時点を基準にします。")
+                .font(.caption).foregroundStyle(.secondary)
+            if controller.settings.style == .thumbnails && !thumbnails.permitted {
+                Text("画面収録が未許可のため、アイコンで表示しています。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }
+        .padding(16)
+        .background(.regularMaterial)
+        .environment(\.colorScheme, controller.settings.theme == .system ? colorScheme : controller.settings.theme == .dark ? .dark : .light)
+    }
+
+    private func previewGrid(_ windows: [TrackedSwitcherWindow]) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
+            ForEach(windows, id: \.info.id) { window in
+                VStack(alignment: .leading, spacing: 4) {
                                 SwitcherWindowTile(window: window, image: thumbnails.images[window.info.id],
                                                    style: controller.settings.style, titlePosition: controller.settings.titlePosition,
                                                    shape: controller.settings.shape, compact: true,
@@ -206,30 +255,8 @@ private struct SwitcherSettingsPreview: View {
                                     .lineLimit(2).padding(.horizontal, 6)
                             }
                             .accessibilityElement(children: .contain)
-                        }
-                    }
-                    .padding(controller.settings.shape == .circle ? 8 : 3)
-                    .background {
-                        if controller.settings.shape == .circle {
-                            RoundedRectangle(cornerRadius: 44).fill(.primary.opacity(0.04))
-                        }
-                    }
-                }
             }
-            if let name = controller.previewAppName {
-                Text("「現在のアプリ」の基準：\(name)").font(.caption).foregroundStyle(.secondary)
-            }
-            Text("カーソル下の対象は、この設定画面を開いた時点を基準にします。")
-                .font(.caption).foregroundStyle(.secondary)
-            if controller.settings.style == .thumbnails && !thumbnails.permitted {
-                Text("画面収録が未許可のため、アイコンで表示しています。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let message = thumbnails.message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }
-        .padding(16)
-        .background(.regularMaterial)
-        .environment(\.colorScheme, controller.settings.theme == .system ? colorScheme : controller.settings.theme == .dark ? .dark : .light)
     }
 
     private func placeholder(_ text: String, icon: String) -> some View {
