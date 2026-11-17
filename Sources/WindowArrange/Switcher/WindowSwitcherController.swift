@@ -14,6 +14,9 @@ final class WindowSwitcherController: ObservableObject {
     @Published private(set) var previewWindows: [TrackedSwitcherWindow] = []
     @Published private(set) var previewLoading = false
     @Published private(set) var previewAppName: String?
+    /// Space groups in display order; empty when the list is not grouped by Space.
+    @Published private(set) var groups: [SwitcherSpaceGroup] = []
+    @Published private(set) var previewGroups: [SwitcherSpaceGroup] = []
     let thumbnails = SwitcherThumbnails()
     let previewThumbnails = SwitcherThumbnails()
     private let tracker = SwitcherWindowTracker()
@@ -98,10 +101,14 @@ final class WindowSwitcherController: ObservableObject {
         previewContext.activeWindow = active?.info.id
         previewContext.visibleSpaces = inventory.visibleSpaces
         previewContext.screenID = active?.info.screenID ?? screenID(preferredScreen(inventory: inventory))
+        previewContext.currentSpace = currentSpace(inventory: inventory, screenID: previewContext.screenID)
         previewAppName = externalFront?.localizedName ?? active?.info.appName
         let ordered = SwitcherList.windows(inventory.windows.map(\.info), settings: settings, context: previewContext)
         let byID = Dictionary(uniqueKeysWithValues: inventory.windows.map { ($0.info.id, $0) })
-        previewWindows = ordered.compactMap { byID[$0.id] }
+        previewGroups = settings.groupsBySpace ? SwitcherSpaceGrouping.groups(ordered, spaces: inventory.spaces,
+            current: previewContext.currentSpace, side: settings.currentSpaceSide) : []
+        let ids = previewGroups.isEmpty ? ordered.map(\.id) : previewGroups.flatMap(\.windowIDs)
+        previewWindows = ids.compactMap { byID[$0] }
         if settings.style == .thumbnails { previewThumbnails.load(previewWindows) }
         else { previewThumbnails.cancel() }
     }
@@ -138,6 +145,7 @@ final class WindowSwitcherController: ObservableObject {
         }
         context = SwitcherContext(activeApp: front?.switcherAppID, activeWindow: inventory.activeWindow,
             cursorApp: underCursor.first?.info.appID, cursorWindows: Set(underCursor.map(\.info.id)), visibleSpaces: inventory.visibleSpaces, screenID: screenID(screen))
+        context.currentSpace = currentSpace(inventory: inventory, screenID: context.screenID)
         isOpen = true; loading = inventory.windows.isEmpty
         keyboard.begin(holding: holding)
         rebuild()
@@ -209,8 +217,13 @@ final class WindowSwitcherController: ObservableObject {
         case .next: selection.move(1)
         case .previous: selection.move(-1)
         case .up, .down:
-            selection.moveVertically(command == .up ? -1 : 1,
-                                     columns: SwitcherLayout.columnCount(for: selection.ids.count))
+            if groups.isEmpty {
+                selection.moveVertically(command == .up ? -1 : 1,
+                                         columns: SwitcherLayout.columnCount(for: selection.ids.count))
+            } else {
+                selection.moveVertically(command == .up ? -1 : 1, groups: groups.map(\.windowIDs),
+                                         columns: SwitcherLayout.groupColumnCount(for:))
+            }
         default: return
         }
         selectedID = selection.selected
@@ -229,6 +242,7 @@ final class WindowSwitcherController: ObservableObject {
             context.activeWindow = tracker.inventory.activeWindow
             context.cursorApp = tracker.inventory.cursorApp; context.cursorWindows = tracker.inventory.cursorWindows
             context.visibleSpaces = tracker.inventory.visibleSpaces
+            context.currentSpace = currentSpace(inventory: tracker.inventory, screenID: context.screenID)
         }
         rebuild(); updateThumbnails()
         if let screen = panel?.screen { resizePanel(on: screen) }
@@ -237,7 +251,8 @@ final class WindowSwitcherController: ObservableObject {
     private func resizePanel(on screen: NSScreen) {
         guard let panel else { return }
         let layout = SwitcherLayout(windowCount: windows.count, maximumWidth: screen.visibleFrame.width - 40,
-                                    requestedScale: settings.effectiveWindowScale, shape: settings.shape, style: settings.style)
+                                    requestedScale: settings.effectiveWindowScale, shape: settings.shape, style: settings.style,
+                                    groupColumns: groups.map { SwitcherLayout.groupColumnCount(for: $0.windowIDs.count) })
         let width = layout.width
         let view: NSHostingView<SwitcherOverlay>
         if let existing = panel.contentView as? NSHostingView<SwitcherOverlay> {
@@ -247,7 +262,7 @@ final class WindowSwitcherController: ObservableObject {
             view = NSHostingView(rootView: SwitcherOverlay(controller: self, thumbnails: thumbnails, layout: layout))
             panel.contentView = view
         }
-        let height = min(screen.visibleFrame.height - 60, 620 * layout.scale, view.fittingSize.height)
+        let height = min(screen.visibleFrame.height - 60, layout.maximumHeight, view.fittingSize.height)
         panel.setFrame(CGRect(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.midY - height / 2,
             width: width, height: height), display: true)
     }
@@ -256,12 +271,20 @@ final class WindowSwitcherController: ObservableObject {
         let ordered = SwitcherList.windows(inventory.windows.map(\.info), settings: settings, context: context)
         let byID = Dictionary(uniqueKeysWithValues: inventory.windows.map { ($0.info.id, $0) })
         var ids = ordered.map(\.id)
+        groups = settings.groupsBySpace ? SwitcherSpaceGrouping.groups(ordered, spaces: inventory.spaces,
+            current: context.currentSpace, side: settings.currentSpaceSide) : []
+        let groupedIDs = groups.isEmpty ? nil : groups.flatMap(\.windowIDs)
         if initialSelection {
-            let live = Set(ids), old = Set(selection.ids)
-            ids = selection.ids.filter { live.contains($0) } + ids.filter { !old.contains($0) }
+            if let groupedIDs { ids = groupedIDs } else {
+                let live = Set(ids), old = Set(selection.ids)
+                ids = selection.ids.filter { live.contains($0) } + ids.filter { !old.contains($0) }
+            }
             selection.reconcile(ids: ids)
         } else if !ids.isEmpty {
+            // Choose the initial target from the configured order (e.g. the previous window),
+            // then lay the tiles out by Space without changing that choice.
             selection.open(ids: ids, current: context.activeWindow, backwards: backwards)
+            if let groupedIDs { ids = groupedIDs; selection.reconcile(ids: ids) }
             initialSelection = true
             let moves = pendingMoves; pendingMoves.removeAll()
             moves.forEach { navigate($0) }
@@ -423,6 +446,41 @@ final class WindowSwitcherController: ObservableObject {
                 }
             }
         }
+        // Space groups side by side, with the current Space at either end.
+        controller.settings.style = .thumbnails; controller.settings.titlePosition = .bottom
+        controller.windows = (0..<6).map { index in
+            TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(index)", appName: "サンプルアプリ", title: "ウィンドウ \(index + 1)",
+                spaces: [UInt64(index < 3 ? 1 : index < 5 ? 2 : 3)]), app: app, nativeID: nil, element: nil)
+        }
+        controller.thumbnails.integrationSetPreviewImages([:])
+        let spaces = (1...6).map { SwitcherSpace(id: UInt64($0), index: $0, label: "デスクトップ \($0)", displayID: "") }
+        let base = controller.windows
+        for (variant, extra, maximumWidth) in [("", 0, CGFloat(1600)), ("-overflow", 6, CGFloat(1200))] {
+        controller.windows = base + (0..<extra).map { index in
+            TrackedSwitcherWindow(info: SwitcherWindow(id: "preview-\(6 + index)", appName: "サンプルアプリ", title: "ウィンドウ \(7 + index)",
+                spaces: [UInt64(4 + index / 2)]), app: app, nativeID: nil, element: nil)
+        }
+        controller.selectedID = extra > 0 ? "preview-11" : "preview-1"
+        for side in SwitcherCurrentSpaceSide.allCases {
+            for theme in [SwitcherTheme.light, .dark] {
+                controller.settings.theme = theme
+                controller.groups = SwitcherSpaceGrouping.groups(controller.windows.map(\.info), spaces: spaces, current: 2, side: side)
+                controller.windows = controller.groups.flatMap(\.windowIDs).compactMap { id in controller.windows.first { $0.info.id == id } }
+                let layout = SwitcherLayout(windowCount: controller.windows.count, maximumWidth: maximumWidth, shape: shape,
+                    groupColumns: controller.groups.map { SwitcherLayout.groupColumnCount(for: $0.windowIDs.count) })
+                let view = NSHostingView(rootView: SwitcherOverlay(controller: controller, thumbnails: controller.thumbnails, layout: layout))
+                let bounds = CGRect(x: 0, y: 0, width: layout.width, height: min(layout.maximumHeight, view.fittingSize.height))
+                let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.contentView = view; view.frame = bounds; view.layoutSubtreeIfNeeded()
+                guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ArrangeError("Preview rendering failed") }
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ArrangeError("Preview encoding failed") }
+                let suffix = (shape == .roundedRectangle ? "" : "-circle") + "-\(side.rawValue)" + variant
+                try data.write(to: URL(fileURLWithPath: "/private/tmp/window-arrange-preview-spaces-\(theme.rawValue)\(suffix).png"))
+            }
+        }
+        }
+        controller.groups = []
         controller.stop()
     }
     func integrationRender(to path: String) throws {
@@ -439,6 +497,11 @@ final class WindowSwitcherController: ObservableObject {
         let active = inventory.windows.first { $0.info.id == inventory.activeWindow }
         if let active, let index = displays.firstIndex(where: { $0.id == active.info.screenID }), NSScreen.screens.indices.contains(index) { return NSScreen.screens[index] }
         return NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+    private func currentSpace(inventory: SwitcherInventory, screenID: String) -> UInt64? {
+        guard settings.groupsBySpace else { return nil }
+        let live = (try? spaces.activeSpaces(includeFullscreen: true)).map { Set($0.map(\.runtimeID)) }
+        return SwitcherSpaceGrouping.currentSpace(spaces: inventory.spaces, visible: live ?? inventory.visibleSpaces, displayID: screenID)
     }
     private func screenID(_ screen: NSScreen) -> String {
         guard let index = NSScreen.screens.firstIndex(of: screen) else { return "" }
@@ -458,16 +521,25 @@ struct SwitcherLayout {
     var requestedScale: CGFloat = 1
     var shape: SwitcherShape = .roundedRectangle
     var style: SwitcherStyle = .thumbnails
+    /// Column count of each Space group, in display order. Empty for the ungrouped grid.
+    var groupColumns: [Int] = []
     let spacing: CGFloat = 12
     let outerPadding: CGFloat = 22
+    let groupSpacing: CGFloat = 14
+    let groupPadding: CGFloat = 10
+    let groupHeaderHeight: CGFloat = 20
+    var grouped: Bool { !groupColumns.isEmpty }
     // Keep captions inside the curved ends when circular tiles are packed closely.
-    var horizontalPadding: CGFloat { shape == .circle ? 64 : outerPadding }
+    var horizontalPadding: CGFloat { shape == .circle && !grouped ? 64 : outerPadding }
     let borderPadding: CGFloat = 1
     let gridPadding: CGFloat = 4
     private static let maximumColumns = 4
+    private static let maximumGroupColumns = 3
 
     static func columnCount(for windowCount: Int) -> Int { min(maximumColumns, max(1, windowCount)) }
-    var columns: Int { Self.columnCount(for: windowCount) }
+    static func groupColumnCount(for windowCount: Int) -> Int { min(maximumGroupColumns, max(1, windowCount)) }
+    var columns: Int { grouped ? groupColumns.max() ?? 1 : Self.columnCount(for: windowCount) }
+    var maximumHeight: CGFloat { (grouped ? 680 : 620) * scale }
     private var insets: CGFloat { 2 * (horizontalPadding + borderPadding + gridPadding) }
     private var fixedTileWidth: CGFloat { shape == .circle ? 20 : 0 }
     private var baseTileWidth: CGFloat {
@@ -476,12 +548,21 @@ struct SwitcherLayout {
     }
     var scale: CGFloat {
         let requested = requestedScale.isFinite ? min(1.5, max(0.7, requestedScale)) : 1
-        let available = (maximumWidth - insets - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+        // A grouped list scrolls sideways between Spaces, but its widest group must fit.
+        let groupInsets = grouped ? 2 * groupPadding : 0
+        let available = (maximumWidth - insets - groupInsets - CGFloat(columns - 1) * spacing) / CGFloat(columns)
         return max(0.1, min(requested, (available - fixedTileWidth) / baseTileWidth))
     }
-    var width: CGFloat {
-        insets + CGFloat(columns) * (baseTileWidth * scale + fixedTileWidth) + CGFloat(columns - 1) * spacing
+    var tileWidth: CGFloat { baseTileWidth * scale + fixedTileWidth }
+    func groupWidth(columns: Int) -> CGFloat {
+        CGFloat(columns) * tileWidth + CGFloat(max(0, columns - 1)) * spacing + 2 * groupPadding
     }
+    /// Width of every group side by side, before the panel is clamped to the display.
+    var contentWidth: CGFloat {
+        guard grouped else { return CGFloat(columns) * tileWidth + CGFloat(columns - 1) * spacing }
+        return groupColumns.reduce(0) { $0 + groupWidth(columns: $1) } + CGFloat(groupColumns.count - 1) * groupSpacing
+    }
+    var width: CGFloat { min(grouped ? maximumWidth : .infinity, insets + contentWidth) }
 }
 
 private struct SwitcherOverlay: View {
@@ -496,7 +577,15 @@ private struct SwitcherOverlay: View {
     private var containerShape: RoundedRectangle {
         // A single row forms a pill; multiple rows keep the same rounded ends
         // without cutting into the first and last columns.
-        RoundedRectangle(cornerRadius: controller.settings.shape == .circle ? tileHeight / 2 + layout.outerPadding : 20)
+        RoundedRectangle(cornerRadius: controller.settings.shape == .circle && !layout.grouped ? tileHeight / 2 + layout.outerPadding : 20)
+    }
+    private func rowsHeight(_ count: Int, columns: Int) -> CGFloat {
+        let rows = max(1, (count + columns - 1) / columns)
+        return CGFloat(rows) * tileHeight + CGFloat(rows - 1) * spacing
+    }
+    private var groupedHeight: CGFloat {
+        let tallest = controller.groups.map { rowsHeight($0.windowIDs.count, columns: SwitcherLayout.groupColumnCount(for: $0.windowIDs.count)) }.max() ?? tileHeight
+        return tallest + layout.groupHeaderHeight + 8 + 2 * layout.groupPadding + 2 * layout.gridPadding
     }
     private var gridHeight: CGFloat {
         let rows = max(1, (controller.windows.count + columns - 1) / columns)
@@ -509,6 +598,8 @@ private struct SwitcherOverlay: View {
                     if controller.loading { ProgressView(); Text("ウィンドウを取得中…") }
                     else { Image(systemName: "macwindow").font(.largeTitle); Text("表示条件に一致するウィンドウはありません") }
                 }.foregroundStyle(.secondary).frame(maxWidth: .infinity).frame(height: gridHeight)
+            } else if layout.grouped && !controller.groups.isEmpty {
+                groupedList
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -535,6 +626,49 @@ private struct SwitcherOverlay: View {
         .padding(layout.borderPadding)
         .frame(width: layout.width)
         .preferredColorScheme(controller.settings.theme == .system ? nil : controller.settings.theme == .dark ? .dark : .light)
+    }
+    /// Space groups side by side; only the current Space's outline is highlighted.
+    private var groupedList: some View {
+        let byID = Dictionary(uniqueKeysWithValues: controller.windows.map { ($0.info.id, $0) })
+        return ScrollViewReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                HStack(alignment: .top, spacing: layout.groupSpacing) {
+                    ForEach(controller.groups) { group in
+                        spaceGroup(group, windows: group.windowIDs.compactMap { byID[$0] })
+                    }
+                }.padding(layout.gridPadding)
+            }
+            .frame(minHeight: 0, idealHeight: groupedHeight, maxHeight: groupedHeight)
+            .onChange(of: controller.selectedID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
+            .onAppear { if let id = controller.selectedID { proxy.scrollTo(id, anchor: .center) } }
+        }
+    }
+    private func spaceGroup(_ group: SwitcherSpaceGroup, windows: [TrackedSwitcherWindow]) -> some View {
+        let columns = SwitcherLayout.groupColumnCount(for: windows.count)
+        let rows = stride(from: 0, to: windows.count, by: columns).map { Array(windows[$0..<min($0 + columns, windows.count)]) }
+        let outline = RoundedRectangle(cornerRadius: 16)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(group.label).font(.callout.weight(.semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(windows.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }.frame(height: layout.groupHeaderHeight)
+            VStack(alignment: .leading, spacing: spacing) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: spacing) {
+                        ForEach(row, id: \.info.id) { window in
+                            tile(window).frame(width: layout.tileWidth).id(window.info.id)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(layout.groupPadding)
+        .frame(width: layout.groupWidth(columns: columns), alignment: .topLeading)
+        .background(.primary.opacity(0.025), in: outline)
+        .overlay(outline.strokeBorder(group.isCurrent ? Color.accentColor : .primary.opacity(0.1), lineWidth: group.isCurrent ? 2.5 : 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(group.isCurrent ? "\(group.label)（現在のSpace）" : group.label)
     }
     private func tile(_ window: TrackedSwitcherWindow) -> some View {
         let selected = controller.selectedID == window.info.id

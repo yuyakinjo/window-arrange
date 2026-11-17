@@ -35,6 +35,10 @@ public enum SwitcherOrder: String, SwitcherChoice {
     case recent, created, alphabetical, space
     public var title: String { switch self { case .recent: return "最近使った順"; case .created: return "最近作成した順"; case .alphabetical: return "名前順"; case .space: return "Space順" } }
 }
+public enum SwitcherCurrentSpaceSide: String, SwitcherChoice {
+    case leading, trailing
+    public var title: String { self == .leading ? "左" : "右" }
+}
 public enum SwitcherStyle: String, SwitcherChoice {
     case thumbnails, icons
     public var title: String { self == .thumbnails ? "サムネイル" : "アプリアイコン" }
@@ -99,6 +103,10 @@ public struct SwitcherSettings: Codable, Equatable {
     public var order: SwitcherOrder = .recent
     public var onePerApp = false
     public var separateTabs = false
+    public var groupBySpace = false
+    public var currentSpaceSide: SwitcherCurrentSpaceSide = .leading
+    /// Space groups are only meaningful when every Space is listed.
+    public var groupsBySpace: Bool { groupBySpace && spaces == .all }
     public var style: SwitcherStyle = .thumbnails
     public var shape: SwitcherShape = .roundedRectangle
     public var titlePosition: SwitcherTitlePosition = .bottom
@@ -118,7 +126,7 @@ public struct SwitcherSettings: Codable, Equatable {
     public var quitApp = Shortcut(keyCode: 12, modifiers: 256, label: "⌘Q")
     public init() {}
     private enum CodingKeys: String, CodingKey {
-        case enabled, apps, spaces, screens, minimized, hidden, fullscreen, windowless, order, onePerApp, separateTabs
+        case enabled, apps, spaces, screens, minimized, hidden, fullscreen, windowless, order, onePerApp, separateTabs, groupBySpace, currentSpaceSide
         case style, shape, titlePosition, theme, windowScale, release, summon, next, previous, confirm, cancel, closeWindow, quitApp, excludedApps
     }
     public init(from decoder: Decoder) throws {
@@ -135,6 +143,8 @@ public struct SwitcherSettings: Codable, Equatable {
         order = try values.decode(SwitcherOrder.self, forKey: .order)
         onePerApp = try values.decode(Bool.self, forKey: .onePerApp)
         separateTabs = try values.decode(Bool.self, forKey: .separateTabs)
+        groupBySpace = try values.decodeIfPresent(Bool.self, forKey: .groupBySpace) ?? false
+        currentSpaceSide = try values.decodeIfPresent(SwitcherCurrentSpaceSide.self, forKey: .currentSpaceSide) ?? .leading
         style = try values.decode(SwitcherStyle.self, forKey: .style)
         shape = try values.decodeIfPresent(SwitcherShape.self, forKey: .shape) ?? .roundedRectangle
         titlePosition = try values.decodeIfPresent(SwitcherTitlePosition.self, forKey: .titlePosition) ?? .bottom
@@ -207,6 +217,8 @@ public struct SwitcherContext {
     public var cursorWindows: Set<String>
     public var visibleSpaces: Set<UInt64>
     public var screenID: String
+    /// The Space shown on the switcher's display, used to place and highlight its group.
+    public var currentSpace: UInt64?
     public init(activeApp: String? = nil, activeWindow: String? = nil, cursorApp: String? = nil,
                 cursorWindows: Set<String> = [], visibleSpaces: Set<UInt64> = [], screenID: String = "") {
         self.activeApp = activeApp; self.activeWindow = activeWindow; self.cursorApp = cursorApp
@@ -266,6 +278,68 @@ public enum SwitcherList {
     }
 }
 
+public struct SwitcherSpace: Equatable {
+    public var id: UInt64
+    public var index: Int
+    public var label: String
+    public var displayID: String
+    public init(id: UInt64, index: Int, label: String, displayID: String) {
+        self.id = id; self.index = index; self.label = label; self.displayID = displayID
+    }
+}
+
+public struct SwitcherSpaceGroup: Equatable, Identifiable {
+    public var id: String
+    public var label: String
+    public var space: UInt64?
+    public var isCurrent: Bool
+    public var windowIDs: [String]
+    public init(id: String, label: String, space: UInt64?, isCurrent: Bool, windowIDs: [String]) {
+        self.id = id; self.label = label; self.space = space; self.isCurrent = isCurrent; self.windowIDs = windowIDs
+    }
+}
+
+public enum SwitcherSpaceGrouping {
+    public static let otherGroupID = "space-other"
+
+    /// The Space shown on the switcher's display. With a single Space list
+    /// ("Displays have separate Spaces" off) the display identifiers may not match.
+    public static func currentSpace(spaces: [SwitcherSpace], visible: Set<UInt64>, displayID: String) -> UInt64? {
+        let candidates = spaces.filter { visible.contains($0.id) }
+        return (candidates.first { $0.displayID.caseInsensitiveCompare(displayID) == .orderedSame } ?? candidates.first)?.id
+    }
+
+    /// Splits an already ordered list into Space groups, keeping the list order inside each group.
+    /// Other Spaces follow Mission Control order; windows without a known Space go to the far end.
+    public static func groups(_ ordered: [SwitcherWindow], spaces: [SwitcherSpace], current: UInt64?,
+                              side: SwitcherCurrentSpaceSide) -> [SwitcherSpaceGroup] {
+        let known = spaces.sorted { $0.index < $1.index }
+        var members: [UInt64: [String]] = [:], other: [String] = []
+        for window in ordered {
+            // Windows shown on every Space (or on several) belong with the current one when possible.
+            if let current, window.spaces.contains(current), known.contains(where: { $0.id == current }) {
+                members[current, default: []].append(window.id)
+            } else if let space = known.first(where: { window.spaces.contains($0.id) }) {
+                members[space.id, default: []].append(window.id)
+            } else { other.append(window.id) }
+        }
+        var result = known.compactMap { space -> SwitcherSpaceGroup? in
+            guard let ids = members[space.id], !ids.isEmpty else { return nil }
+            return SwitcherSpaceGroup(id: "space-\(space.id)", label: space.label, space: space.id,
+                                      isCurrent: space.id == current, windowIDs: ids)
+        }
+        if let index = result.firstIndex(where: \.isCurrent) {
+            let group = result.remove(at: index)
+            if side == .leading { result.insert(group, at: 0) } else { result.append(group) }
+        }
+        if !other.isEmpty {
+            let group = SwitcherSpaceGroup(id: otherGroupID, label: "その他", space: nil, isCurrent: false, windowIDs: other)
+            if side == .leading { result.append(group) } else { result.insert(group, at: 0) }
+        }
+        return result
+    }
+}
+
 public struct SwitcherSelection {
     public private(set) var ids: [String] = []
     public private(set) var selected: String?
@@ -290,6 +364,13 @@ public struct SwitcherSelection {
         let rows = (ids.count + columns - 1) / columns
         let row = ((index / columns + delta) % rows + rows) % rows
         selected = ids[min(row * columns + index % columns, ids.count - 1)]
+    }
+    /// Vertical movement inside the selected tile's Space group, using that group's own grid.
+    public mutating func moveVertically(_ delta: Int, groups: [[String]], columns: (Int) -> Int) {
+        guard let selected, let group = groups.first(where: { $0.contains(selected) }) else { return }
+        var inner = SwitcherSelection(); inner.ids = group; inner.selected = selected
+        inner.moveVertically(delta, columns: columns(group.count))
+        if let target = inner.selected, ids.contains(target) { self.selected = target }
     }
     public mutating func select(_ id: String) { if ids.contains(id) { selected = id } }
     public mutating func reconcile(ids: [String]) {
