@@ -281,10 +281,15 @@ final class WindowSwitcherController: ObservableObject {
             }
             selection.reconcile(ids: ids)
         } else if !ids.isEmpty {
-            // Choose the initial target from the configured order (e.g. the previous window),
-            // then lay the tiles out by Space without changing that choice.
+            // Choose the initial target from the configured order (e.g. the previous window).
+            // Grouped by Space, prefer that target inside the current Space's group.
             selection.open(ids: ids, current: context.activeWindow, backwards: backwards)
-            if let groupedIDs { ids = groupedIDs; selection.reconcile(ids: ids) }
+            if let groupedIDs {
+                let target = SwitcherSpaceGrouping.initialSelection(ordered: ids, groups: groups,
+                    active: context.activeWindow, backwards: backwards)
+                ids = groupedIDs; selection.reconcile(ids: ids)
+                if let target { selection.select(target) }
+            }
             initialSelection = true
             let moves = pendingMoves; pendingMoves.removeAll()
             moves.forEach { navigate($0) }
@@ -328,7 +333,7 @@ final class WindowSwitcherController: ObservableObject {
                 do { try await spaces.activate(space.record.id, includeFullscreen: true) }
                 catch is CancellationError { throw CancellationError() }
                 catch {
-                    // Older macOS releases may not expose the Space activation entry point.
+                    // The Dock may refuse the swipe (e.g. Mission Control is open).
                     // Activation/AXRaise below can still switch to the target's existing Space.
                 }
             }
@@ -677,6 +682,9 @@ private struct SwitcherOverlay: View {
                                style: controller.settings.style, titlePosition: controller.settings.titlePosition,
                                shape: controller.settings.shape, selected: selected, scale: layout.scale)
         }.buttonStyle(.plain)
+            // With Keyboard Navigation on, the key panel would draw a focus ring on one tile
+            // that stays put while the selection outline moves; the selection is the only highlight.
+            .focusable(false)
             .accessibilityLabel("\(window.info.appName)、\(window.info.title)")
             .accessibilityAddTraits(selected ? [.isSelected] : [])
     }

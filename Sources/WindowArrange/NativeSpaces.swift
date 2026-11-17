@@ -3,6 +3,7 @@ import ApplicationServices
 import ArrangementCore
 import ObjectiveC.runtime
 import Darwin
+import CDockSwipe
 
 struct LiveSpace {
     let record: SpaceRecord
@@ -128,36 +129,56 @@ final class NativeSpaces {
     }
     @MainActor
     func activate(_ uuid: String, includeFullscreen: Bool = false) async throws {
-        guard let connection, let currentSpace, let target = try spaces(includeFullscreen: includeFullscreen).first(where: { $0.record.id == uuid }) else {
+        guard let connection, let currentSpace, let copyDisplays,
+              let target = try spaces(includeFullscreen: includeFullscreen).first(where: { $0.record.id == uuid }) else {
             throw ArrangeError("表示するSpaceが見つかりませんでした。")
         }
-        if currentSpace(connection(), target.record.displayID as CFString) == target.runtimeID { return }
-        guard let cls = NSClassFromString("SLSBridgedManagedDisplaySetCurrentSpaceOperation") else {
-            throw ArrangeError("別Spaceのウィンドウを取得できません。このmacOSでは対象のSpaceを一度表示してから復元してください。")
+        let displayID = target.record.displayID
+        func current() -> UInt64 { currentSpace(connection(), displayID as CFString) }
+        if current() == target.runtimeID { return }
+        // SLSBridgedManagedDisplaySetCurrentSpaceOperation only rewrites WindowServer's current
+        // Space on recent macOS: the screen stays put and the Dock falls out of sync. Ask the Dock
+        // instead, one synthetic swipe per Space, in the order Mission Control lists them.
+        guard let displays = copyDisplays(connection())?.takeRetainedValue() as? [[String: Any]],
+              let display = displays.first(where: { ($0["Display Identifier"] as? String) == displayID }) else {
+            throw ArrangeError("表示するSpaceのディスプレイが見つかりませんでした。")
         }
-        let allocSelector = NSSelectorFromString("alloc")
-        let initSelector = NSSelectorFromString("initWithDisplayIdentifier:spaceID:")
-        typealias Allocate = @convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>?
-        typealias Initialize = @convention(c) (AnyObject, Selector, NSString, UInt64) -> Unmanaged<AnyObject>?
-        typealias Perform = @convention(c) (AnyObject, Selector) -> Void
-        let performSelector = NSSelectorFromString("performWithWMBridgeDelegate")
-        guard let meta = object_getClass(cls), let allocIMP = class_getMethodImplementation(meta, allocSelector),
-              let initMethod = class_getInstanceMethod(cls, initSelector), let performMethod = class_getInstanceMethod(cls, performSelector) else {
-            throw ArrangeError("Space表示用のシステムAPIが変更されています。")
+        let order = (display["Spaces"] as? [[String: Any]] ?? []).compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
+        // A swipe switches the display under the pointer.
+        let restorePointer = displays.count > 1 ? Self.movePointer(toDisplay: displayID) : nil
+        defer { restorePointer?() }
+        for _ in 0..<order.count {
+            let now = current()
+            if now == target.runtimeID { return }
+            guard let steps = SpaceSwitchPlan.steps(order: order, current: now, target: target.runtimeID), steps != 0,
+                  ds_post_switch(steps < 0 ? DSDirectionLeft : DSDirectionRight) else { break }
+            var moved = false
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(50))
+                if current() != now { moved = true; break }
+            }
+            guard moved else { break }
         }
-        let allocate = unsafeBitCast(allocIMP, to: Allocate.self)
-        let initialize = unsafeBitCast(method_getImplementation(initMethod), to: Initialize.self)
-        guard let raw = allocate(cls, allocSelector),
-              let operation = initialize(raw.takeUnretainedValue(), initSelector, target.record.displayID as NSString, target.runtimeID)?.takeRetainedValue() else {
-            throw ArrangeError("Spaceの表示を開始できませんでした。")
-        }
-        let perform = unsafeBitCast(method_getImplementation(performMethod), to: Perform.self)
-        perform(operation, performSelector)
-        for _ in 0..<20 {
-            try await Task.sleep(for: .milliseconds(100))
-            if currentSpace(connection(), target.record.displayID as CFString) == target.runtimeID { return }
-        }
+        if current() == target.runtimeID { return }
         throw ArrangeError("対象Spaceを表示できませんでした。対象のデスクトップを一度表示してから再試行してください。")
+    }
+    /// Moves the pointer to the centre of a display identified by its UUID and returns how to put it back.
+    private static func movePointer(toDisplay uuid: String) -> (() -> Void)? {
+        let original = CGEvent(source: nil)?.location
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return nil }
+        guard let id = ids.first(where: { display in
+            guard let raw = CGDisplayCreateUUIDFromDisplayID(display)?.takeRetainedValue() else { return false }
+            return (CFUUIDCreateString(nil, raw) as String).caseInsensitiveCompare(uuid) == .orderedSame
+        }) else { return nil }
+        let bounds = CGDisplayBounds(id)
+        if let original, bounds.contains(original) { return nil }
+        CGWarpMouseCursorPosition(CGPoint(x: bounds.midX, y: bounds.midY))
+        CGAssociateMouseAndMouseCursorPosition(1)
+        guard let original else { return nil }
+        return { CGWarpMouseCursorPosition(original); CGAssociateMouseAndMouseCursorPosition(1) }
     }
     @MainActor
     func move(window id: UInt32, to uuid: String) async throws {

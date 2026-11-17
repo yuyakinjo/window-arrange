@@ -338,6 +338,21 @@ public enum SwitcherSpaceGrouping {
         }
         return result
     }
+
+    /// The first selection when the list opens grouped by Space: the next window inside the current
+    /// Space's group (in the configured order), so switching stays on the Space being used.
+    /// Falls back to the whole ordered list when the current group has no other window.
+    public static func initialSelection(ordered: [String], groups: [SwitcherSpaceGroup], active: String?,
+                                        backwards: Bool) -> String? {
+        if let current = groups.first(where: \.isCurrent) {
+            var inner = SwitcherSelection()
+            inner.open(ids: current.windowIDs, current: active, backwards: backwards)
+            if let target = inner.selected, target != active { return target }
+        }
+        var whole = SwitcherSelection()
+        whole.open(ids: ordered, current: active, backwards: backwards)
+        return whole.selected
+    }
 }
 
 public struct SwitcherSelection {
