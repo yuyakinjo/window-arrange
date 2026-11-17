@@ -328,7 +328,7 @@ final class WindowSwitcherController: ObservableObject {
                 do { try await spaces.activate(space.record.id, includeFullscreen: true) }
                 catch is CancellationError { throw CancellationError() }
                 catch {
-                    // Older macOS releases may not expose the Space activation entry point.
+                    // The Dock may refuse the swipe (e.g. Mission Control is open).
                     // Activation/AXRaise below can still switch to the target's existing Space.
                 }
             }
@@ -677,6 +677,9 @@ private struct SwitcherOverlay: View {
                                style: controller.settings.style, titlePosition: controller.settings.titlePosition,
                                shape: controller.settings.shape, selected: selected, scale: layout.scale)
         }.buttonStyle(.plain)
+            // With Keyboard Navigation on, the key panel would draw a focus ring on one tile
+            // that stays put while the selection outline moves; the selection is the only highlight.
+            .focusable(false)
             .accessibilityLabel("\(window.info.appName)、\(window.info.title)")
             .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
