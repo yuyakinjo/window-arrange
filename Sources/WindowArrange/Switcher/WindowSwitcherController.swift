@@ -281,10 +281,15 @@ final class WindowSwitcherController: ObservableObject {
             }
             selection.reconcile(ids: ids)
         } else if !ids.isEmpty {
-            // Choose the initial target from the configured order (e.g. the previous window),
-            // then lay the tiles out by Space without changing that choice.
+            // Choose the initial target from the configured order (e.g. the previous window).
+            // Grouped by Space, prefer that target inside the current Space's group.
             selection.open(ids: ids, current: context.activeWindow, backwards: backwards)
-            if let groupedIDs { ids = groupedIDs; selection.reconcile(ids: ids) }
+            if let groupedIDs {
+                let target = SwitcherSpaceGrouping.initialSelection(ordered: ids, groups: groups,
+                    active: context.activeWindow, backwards: backwards)
+                ids = groupedIDs; selection.reconcile(ids: ids)
+                if let target { selection.select(target) }
+            }
             initialSelection = true
             let moves = pendingMoves; pendingMoves.removeAll()
             moves.forEach { navigate($0) }

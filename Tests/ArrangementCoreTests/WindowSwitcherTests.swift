@@ -366,6 +366,24 @@ struct SwitcherSpaceGroupingTests {
         #expect(SwitcherSpaceGrouping.currentSpace(spaces: spaces, visible: [20], displayID: "Main-UUID") == 20)
         #expect(SwitcherSpaceGrouping.currentSpace(spaces: spaces, visible: [], displayID: "main") == nil)
     }
+    @Test func initialSelectionPrefersTheCurrentSpaceGroup() {
+        // Recent order: a1 (Space 10) was used before b1 (Space 20), yet b2 shares the current Space.
+        let recent = [
+            SwitcherWindow(id: "b1", spaces: [20]), SwitcherWindow(id: "a1", spaces: [10]),
+            SwitcherWindow(id: "b2", spaces: [20]), SwitcherWindow(id: "b3", spaces: [20])
+        ]
+        let ids = recent.map(\.id)
+        let groups = SwitcherSpaceGrouping.groups(recent, spaces: spaces, current: 20, side: .leading)
+        #expect(SwitcherSpaceGrouping.initialSelection(ordered: ids, groups: groups, active: "b1", backwards: false) == "b2")
+        #expect(SwitcherSpaceGrouping.initialSelection(ordered: ids, groups: groups, active: "b1", backwards: true) == "b3")
+    }
+    @Test func initialSelectionFallsBackWhenTheCurrentSpaceHasNoOtherWindow() {
+        let recent = [SwitcherWindow(id: "b1", spaces: [20]), SwitcherWindow(id: "a1", spaces: [10])]
+        let groups = SwitcherSpaceGrouping.groups(recent, spaces: spaces, current: 20, side: .leading)
+        #expect(SwitcherSpaceGrouping.initialSelection(ordered: ["b1", "a1"], groups: groups, active: "b1", backwards: false) == "a1")
+        let empty = SwitcherSpaceGrouping.groups([SwitcherWindow(id: "a1", spaces: [10])], spaces: spaces, current: 20, side: .leading)
+        #expect(SwitcherSpaceGrouping.initialSelection(ordered: ["a1"], groups: empty, active: nil, backwards: false) == "a1")
+    }
     @Test func verticalNavigationStaysInsideTheSelectedSpaceGroup() {
         var selection = SwitcherSelection()
         selection.open(ids: ["a", "b", "c", "d", "e"], current: nil, backwards: false)
