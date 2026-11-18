@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     let headMotion = HeadMotionController()
     let trackpadEdge = TrackpadEdgeController()
     let spaceKeys = SpaceKeyController()
+    let updater = SourceUpdateController()
     private let hotKeys = HotKeyManager()
     private let store: DataStore
     private var timer: Timer?

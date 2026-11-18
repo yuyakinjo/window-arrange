@@ -72,12 +72,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return StatusMenuState(busy: model.busy, switcherEnabled: model.data.switcher.enabled,
                 selected: model.selected, snapshots: model.data.snapshots,
                 motionMonitoring: model.headMotion.monitoring, motionEnabled: model.headMotion.enabled,
-                motionReady: model.headMotion.receiving && model.headMotion.calibrated)
+                motionReady: model.headMotion.receiving && model.headMotion.calibrated,
+                update: model.updater.state)
         }, perform: { [weak self] action in self?.performMenuAction(action) },
            trackingChanged: { [weak self] tracking in self?.model.headMotion.setMenuTracking(tracking) })
         model.switcher.start()
         model.startProfileMonitoring()
         model.trackpadEdge.startIfEnabled()
+        model.updater.start()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
             // Let the Bun development runner request a normal app shutdown with SIGTERM.
@@ -100,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.switcher.stop()
         model.headMotion.stop()
         model.trackpadEdge.stop()
+        model.updater.stop()
         statusMenu?.stop()
         #if DEBUG
         if CommandLine.arguments.contains("--development") {
@@ -150,6 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 Task { await model.restore(snapshot) }
             }
         case .select(let id): model.select(id)
+        case .update: model.updater.update()
+        case .showUpdateLog: model.updater.showLog()
         case .quit: NSApp.terminate(nil)
         }
     }

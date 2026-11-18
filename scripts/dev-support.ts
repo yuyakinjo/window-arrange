@@ -1,20 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { APP, ROOT, run, type Runner } from "./common";
 import { buildApp } from "./build";
+import { inputFiles } from "./source";
 
-export function inputFiles(root = ROOT): string[] {
-  const files = ["Package.swift", "package.json"].filter(name => existsSync(join(root, name)));
-  for (const directory of ["Sources", "Resources", "scripts"]) {
-    if (!existsSync(join(root, directory))) continue;
-    for (const entry of readdirSync(join(root, directory), { recursive: true, withFileTypes: true })) {
-      if (entry.isFile() && (directory === "Resources" || /\.(swift|ts)$/.test(entry.name))) {
-        files.push(relative(root, join(entry.parentPath, entry.name)));
-      }
-    }
-  }
-  return files.sort();
-}
+export { inputFiles };
 
 export function refreshInputs(root = ROOT) {
   mkdirSync(join(root, ".build"), { recursive: true });
@@ -138,18 +128,21 @@ export async function rebuild(options: {
   app?: string;
   root?: string;
   launch?: boolean;
+  configuration?: "debug" | "release";
+  launchArguments?: string[];
   signal?: AbortSignal;
   execute?: Runner;
   build?: typeof buildApp;
   stop?: typeof stopApp;
   publishing?: (value: boolean) => void;
 } = {}) {
-  const { app = APP, root = ROOT, launch = true, signal, execute = run, build = buildApp, stop = stopApp } = options;
+  const { app = APP, root = ROOT, launch = true, configuration = "debug", launchArguments = ["--development"],
+    signal, execute = run, build = buildApp, stop = stopApp } = options;
   mkdirSync(join(root, ".build"), { recursive: true });
   const temporary = mkdtempSync(join(root, ".build/dev-app-"));
   const staged = join(temporary, "Window Arrange.app");
   try {
-    await build("debug", staged, true, execute, signal);
+    await build(configuration, staged, true, execute, signal);
     let previous = "";
     if (existsSync(app)) {
       try { previous = requirement(await execute(["/usr/bin/codesign", "-d", "-r-", app], { capture: true, signal })); }
@@ -170,7 +163,10 @@ export async function rebuild(options: {
       if (existsSync(backup)) renameSync(backup, app);
       throw error;
     }
-    if (launch) await execute(["/usr/bin/open", "-n", "-a", app, "--args", "--development"]);
+    if (launch) {
+      const extra = launchArguments.length ? ["--args", ...launchArguments] : [];
+      await execute(["/usr/bin/open", "-n", "-a", app, ...extra]);
+    }
     console.log("更新しました。" + (launch ? "アプリを再起動しました。" : ""));
   } finally {
     options.publishing?.(false);

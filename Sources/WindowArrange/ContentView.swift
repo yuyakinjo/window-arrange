@@ -84,7 +84,9 @@ struct ContentView: View {
                 Label("開発モード", systemImage: "hammer").font(.caption2).foregroundStyle(accent).padding(.top, 16)
             }
             #endif
+            SourceUpdateBadge(updater: model.updater).padding(.top, 16)
             Text("Window Arrange  \(appVersion)").font(.caption2).foregroundStyle(.tertiary).padding(.top, 16)
+                .help(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion").map { "Build \($0)" } ?? "")
         }
         .padding(.horizontal, 20).padding(.bottom, 20).frame(width: 205)
         .background(.regularMaterial)
@@ -467,5 +469,35 @@ private struct LoginItemSettings: View {
         }
         .onAppear { login.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in login.refresh() }
+    }
+}
+
+/// Shown only when the source tree differs from the running build (see SourceUpdateController).
+private struct SourceUpdateBadge: View {
+    @ObservedObject var updater: SourceUpdateController
+    var body: some View {
+        switch updater.state {
+        case .unavailable, .upToDate: EmptyView()
+        case .available:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("ソースが変更されました").font(.caption2).foregroundStyle(.secondary)
+                Button { updater.update() } label: {
+                    Label("更新して再起動", systemImage: "arrow.triangle.2.circlepath")
+                }.buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
+            }
+        case .updating:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("ビルド中…").font(.caption2).foregroundStyle(.secondary)
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(message).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Button("ログ") { updater.showLog() }
+                    Button("再試行") { updater.update() }
+                }.controlSize(.small)
+            }
+        }
     }
 }

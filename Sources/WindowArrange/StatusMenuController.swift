@@ -9,10 +9,12 @@ struct StatusMenuState {
     var motionMonitoring = false
     var motionEnabled = false
     var motionReady = false
+    var update: SourceUpdateController.State = .unavailable
 }
 
 enum StatusMenuAction: Equatable {
     case openWindow, switchWindows, openAirPods, toggleMotion, stopMotion, capture, quit
+    case update, showUpdateLog
     case restore(UUID), select(UUID)
 }
 
@@ -57,6 +59,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         guard menu === self.menu, !tracking else { return }
         let current = state()
         menu.removeAllItems()
+        addUpdateItems(current.update, to: menu)
         add("Window Arrangeを開く", .openWindow, to: menu)
         add("ウィンドウを切り替える", .switchWindows, to: menu, enabled: current.switcherEnabled)
         let airPods = submenu("AirPods操作", in: menu)
@@ -80,6 +83,19 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let quit = add("終了", .quit, to: menu)
         quit.keyEquivalent = "q"
         quit.keyEquivalentModifierMask = .command
+    }
+
+    private func addUpdateItems(_ update: SourceUpdateController.State, to menu: NSMenu) {
+        switch update {
+        case .unavailable, .upToDate: return
+        case .available: add("ソースが変更されました — 更新して再起動", .update, to: menu)
+        case .updating: add("更新中（ビルドしています）…", .update, to: menu, enabled: false)
+        case .failed(let message):
+            add(message, .showUpdateLog, to: menu, enabled: false)
+            add("更新ログを表示", .showUpdateLog, to: menu)
+            add("もう一度更新する", .update, to: menu)
+        }
+        menu.addItem(.separator())
     }
 
     func menuWillOpen(_ menu: NSMenu) {

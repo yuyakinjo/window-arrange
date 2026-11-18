@@ -8,6 +8,7 @@
     "dev:setup": "bun scripts/dev.ts --setup",
     "dev:once": "bun scripts/dev.ts --once",
     "build": "bun scripts/build.ts",
+    "update": "bun scripts/update.ts",
     "test": "bun scripts/test.ts",
     "test:tools": "bun test scripts/tests"
   }
